@@ -1,0 +1,9 @@
+# The core maths (irt, scheduler, selector, competency) needs NOTHING beyond the
+# standard library, so every claim in this repository is verifiable on a fresh clone
+# before anything is installed.
+#
+# The FastAPI service layer is an optional extra:
+fastapi>=0.115
+uvicorn>=0.30
+pydantic>=2.0
+httpx>=0.27        # only for the API self-test (TestClient)
