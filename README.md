@@ -38,6 +38,83 @@ python src/api.py --selftest         # 15 checks — HTTP agrees with the librar
 
 ---
 
+## See it work in 30 seconds
+
+The API is a real running service. ⚠️ **Nothing below is illustrative** — it is a transcript of
+the actual output, captured from `uvicorn api:app` on this repo.
+
+```bash
+pip install fastapi uvicorn pydantic
+uvicorn api:app --app-dir src --port 8000     # interactive docs at /docs
+```
+
+**What is loaded.** Note that `/health` reports *what it has*, not merely that the process is
+up — a health check that only says "ok" tells a client nothing about whether the thing it needs
+is present, which is how a broken dependency comes to look like a slow service.
+
+```
+$ curl -s localhost:8000/health
+{
+  "status": "ok",
+  "items": 34,
+  "competencies": 8,
+  "domains": 4,
+  "graph_valid": true
+}
+```
+
+**The recommendation, and the reason for it.** This is the whole point of the repository: the
+API returns *why*, not just *what*.
+
+```
+$ curl -s -X POST localhost:8000/recommend -d @candidate.json
+{
+  "item_id": "q-001",
+  "competency_id": "c-rag",
+  "difficulty": -0.4,
+  "basis": "measured",
+  "probing": true,
+  "score": 1.169
+}
+
+  terms (why this item):
+    info     +0.349
+    cover    +0.214
+    weight   +0.200
+    gap      +0.174
+    unc      +0.100
+    perf     +0.078
+    rec      +0.053
+```
+
+⚠️ `basis` is the field that matters most. It says **`measured`** when the pick is driven by
+this candidate's history, and **`cold_start`** when it rests on the prior — because a
+recommendation and a guess must not look the same to a client.
+
+**Readiness, with uncertainty.** Every figure carries its standard error, and a `reliable` flag
+that is false when the estimate rests on too few items.
+
+```
+$ curl -s -X POST localhost:8000/readiness -d @candidate.json
+  exam_weighted_mean       0.483
+  exam_weighted_bottleneck 0.458
+
+  competency                        theta     SE   n  reliable
+  Chunk content for retrieval      -0.58   2.03  1  False
+  Build a retrieval system         -0.48   2.00  1  False
+  Write a scoring rubric           +0.26   2.29  1  False
+  Fine-tune a model                +0.46   2.01  1  False
+  Cut inference cost               +0.00   1.00  0  False
+  Curate and clean training data   +0.00   1.00  0  False
+```
+
+⚠️ **Read the SE column, because it is the honest part.** After one item the standard error is
+about **2.0 logits** — the estimate is barely distinguishable from the prior, and `reliable` is
+`False` for every competency. That is what a readiness score from four questions actually is, and
+the service says so rather than rendering "72% ready".
+
+---
+
 ## The measured results
 
 ### IRT recovers ability it was not given (`irt.py`)
