@@ -4,11 +4,14 @@ A competency-based adaptive practice engine: readiness scoring **with uncertaint
 next-item recommender that explains itself, spaced-repetition scheduling, and a FastAPI service
 layer.
 
-> **The question this answers:** *"what should this candidate practise next?"* — which is a
-> ranking function, and the specification for it is usually written out in prose. §3 of
-> [`THEORY.md`](THEORY.md) shows the five signals such a function needs, implemented from
-> scratch as five terms, with three baselines and an ablation to measure whether they earn
-> their place.
+> **Two questions this answers**, and they are the two halves of an assessment product:
+>
+> 1. *"What should this candidate practise next?"* — a ranking function, whose specification is
+>    usually written out in prose. §3 of [`THEORY.md`](THEORY.md) shows the five signals such a
+>    function needs, implemented from scratch as five terms, with three baselines and an
+>    ablation to measure whether they earn their place.
+> 2. *"Why was my answer wrong?"* — grounded in **approved content**, cited, and **refused**
+>    when the syllabus does not cover it. See [`THEORY.md`](THEORY.md) §4.
 
 ⚠️ **Start with [`THEORY.md`](THEORY.md).** It explains item response theory, spaced repetition
 and how the JD's own sentence is a ranking function — in plain English, with the comparisons to
@@ -25,7 +28,11 @@ software engineering. This README is the index and the results.
 | `src/scheduler.py` | Spaced repetition: the forgetting curve, interval inversion, and state updates — plus SM-2 for comparison |
 | `src/competency.py` | The competency graph: exam → domain → competency → concept → question, with validation |
 | `src/selector.py` | **The recommender.** The five-term ranking function the JD specifies, three baselines, and an ablation |
+| `src/retrieval.py` | Retrieval over the **approved** content: BM25, corpus-known coverage, and an abstention gate |
+| `src/tutor.py` | **The explanation engine**: a named misconception, a grounded explanation, a citation — or a refusal |
 | `src/api.py` | **The FastAPI service layer**: typed models, validation that rejects, abstention as a first-class response |
+| `content/syllabus.md` | The approved corpus. Fixed, vetted, and inspectable at `GET /content/sources` |
+| `content/items.json` | Authored questions, with each **wrong option mapped to the misconception it encodes** |
 
 ```bash
 python src/irt.py --selftest         # 14 checks — the estimator recovers known ability
@@ -33,7 +40,11 @@ python src/scheduler.py --selftest   # 17 checks — and hits its stated retenti
 python src/competency.py             # validates the graph, prints coverage
 python src/selector.py --selftest    # the five-term ranking, baselines, and an ablation
 python src/selector.py --explain     # the top 8 recommendations with their terms
-python src/api.py --selftest         # 15 checks — HTTP agrees with the library
+python src/retrieval.py --selftest   # 26 checks — finds what is covered, refuses what is not
+python src/tutor.py --selftest       # 12 checks — and two wrong answers give two diagnoses
+python src/api.py --selftest         # 23 checks — HTTP agrees with the library
+
+python src/tutor.py --item q-002 --chosen C     # one explanation, without a server
 ```
 
 ---
@@ -112,6 +123,92 @@ $ curl -s -X POST localhost:8000/readiness -d @candidate.json
 about **2.0 logits** — the estimate is barely distinguishable from the prior, and `reliable` is
 `False` for every competency. That is what a readiness score from four questions actually is, and
 the service says so rather than rendering "72% ready".
+
+---
+
+## Why the answer was wrong
+
+⚠️ **Submit a wrong answer, not a corpus.** The corpus is fixed and pre-approved, because
+*"grounded in reliable and validated sources"* is only a meaningful promise if **the set of
+sources is fixed** — a system that answers from whatever document it is handed has no notion of
+a validated source. `GET /content/sources` enumerates exactly what the tutor may teach from.
+
+### ⚠️ The test that proves this is not a document chatbot
+
+**The same question with two different wrong answers produces two different diagnoses.** A
+language model cannot do that from the question alone — it does not know which option the
+candidate ticked. This is **distractor analysis**, and it is what the role means by *"identify
+the reasons behind incorrect answers."*
+
+```
+$ curl -s localhost:8000/content/sources
+{
+  "approved_passages": 10,
+  "authored_questions": 8
+}
+  passages: d-retrieval#1, d-retrieval#2, d-retrieval#3, d-chunk#1, d-chunk#2 ...
+
+$ curl -s -X POST localhost:8000/explain -d '{"item_id":"q-002","chosen":"B"}'
+{
+  "item_id": "q-002", "chosen": "B", "correct": "A",
+  "misconception": "attributes the problem to a sign cancellation that does not occur,
+                    rather than to the difference in scale",
+  "citations": [{"passage_id": "d-retrieval#2",
+                 "source": "Fusing scores you cannot compare"}],
+  "grounded": true, "generator": "template"
+}
+
+$ curl -s -X POST localhost:8000/explain -d '{"item_id":"q-002","chosen":"C"}'
+{
+  "chosen": "C",
+  "misconception": "states a units objection, which is true in spirit but is not the
+                    mechanism that makes the sum unsafe in practice",
+  "citations": [{"passage_id": "d-retrieval#2", ...}]
+}
+
+  explanation: Choosing C: states a units objection, which is true in spirit but is not the
+  mechanism that makes the sum unsafe in practice
+
+  The correct answer is A. Fusing scores you cannot compare says: "BM25 scores are unbounded
+  and grow with term frequency and corpus size. Cosine similarity is bounded to `[-1, 1]`."
+
+  That is what rules out C.
+```
+
+### Two design decisions that are not negotiable
+
+**1. ⚠️ The diagnosis is authored, not generated.** The misconception label comes from a subject
+expert via `content/items.json`. The model's job is to explain it in prose, grounded in a cited
+passage. **A model must not invent the diagnosis** — if it could, the product would be telling
+candidates they misunderstood something they did not.
+
+**2. ⚠️ No source, no answer.** If the approved content does not cover the question, the tutor
+**refuses**. It does not answer from general knowledge, which is the failure that makes an
+educational product unsafe. And a citation the model *invented* is **rejected in code after the
+call**, not requested in the prompt — a prompt instruction is a preference; a validator is a
+guarantee.
+
+### ⚠️ Three bugs this section found, all in the sufficiency gate
+
+The gate decides *"is this question in the syllabus?"*, and it took three attempts. Each failure
+is pinned as a test so none can return:
+
+| Version | Failure | Measured |
+|---|---|---|
+| Coverage over the whole query | An expert wrote *"states a **units** objection"*; the syllabus never uses "units" | coverage **32% → 22%** → the tutor refused a question whose passage it had already ranked **first** |
+| Gate on the question stem alone | A scenario-style stem is mostly scenario words (`system`, `document`) | **3 of 8** questions abstained for the same dilution reason |
+| **Corpus-known terms only** | ✅ | the question above is **100%**; a framing-only question (*"how does a search system work in Peru"*) is correctly refused |
+
+**The lesson:** coverage must measure *"of the words this corpus understands, how many does this
+passage use?"* Measuring it over words the corpus has **never seen** measures the author's
+vocabulary, not the candidate's understanding — and the resulting refusal looks like a content
+gap rather than a wording mismatch.
+
+### ⚠️ And the bottleneck is not the AI
+
+The engine holds **34 items**. This repository has authored content for **8**. Writing a
+distractor and naming the misconception it encodes is subject-expert work, and **that is the
+scarce resource in this product** — not the model, and not the retrieval.
 
 ---
 
@@ -246,6 +343,16 @@ anything is installed — the same rule the rest of this repository follows.
   it — and the tables are implied by the dataclasses (`CandidateState`, `Card`, the graph).
 - **No auth, no rate limiting, no multi-tenancy.** Those are product concerns and their absence is
   deliberate rather than overlooked.
+- **⚠️ The LLM explainer has never been run against a live API.** It is implemented, uses
+  `response_format: json_object`, and its citation validator is tested — but every explanation in
+  this repository was produced by the **deterministic** explainer. Set `TUTOR_API_KEY` to run the
+  model path; nothing here should claim more than that.
+- **No dense retrieval.** BM25 only, so the repo runs on the standard library. Production would
+  fuse BM25 with an encoder exactly as `RaggyEditor` does, and would need a stemmer better than
+  the plural strip in `retrieval.py`.
+- **The official answer key is per-question, not per-option.** Distractors are mapped to
+  misconceptions by hand for 8 items; the other 26 have calibrated parameters and no authored
+  text at all.
 
 ---
 
@@ -258,6 +365,13 @@ anything is installed — the same rule the rest of this repository follows.
 | *"mechanisms that determine what a candidate should practice next"* | ✅ built — ⚠️ **but it loses to a simple baseline, and that is documented** |
 | *"competency gaps, previous performance, exam weighting, uncertainty, recency"* | ✅ all five implemented as terms; ⚠️ four are constants on a cold start, measured |
 | *"personalized learning and recommendation systems"* | ✅ `THEORY.md` §3 explains why this **is** a recommender system |
+| *"Develop AI-powered features using foundation-model APIs"* | ✅ `LLMExplainer` — ⚠️ **implemented but never run live; the deterministic explainer is what produced every result here** |
+| *"Implement structured outputs"* | ✅ `response_format: json_object` plus a validator that **rejects an invented citation** |
+| *"Design and develop RAG systems"* | ✅ `retrieval.py` — BM25 over approved content, corpus-known coverage, abstention |
+| *"grounded in reliable and validated sources"* | ✅ every claim carries a citation that resolves to `GET /content/sources`, or the tutor refuses |
+| *"identify the reasons behind incorrect answers"* | ✅ **distractor analysis** — the diagnosis is authored per wrong option, not generated |
+| *"detect potential misconceptions"* | ✅ the authored `misconceptions` map |
+| *"Ensure AI systems are reliable and maintainable"* | ✅ every module self-tests offline on the standard library |
 | *"Python / FastAPI"* | ✅ `api.py`, with a parity test against the library |
 | *"PostgreSQL"* | ❌ not used — SQLite/`dict` here; the JD names it and this does not demonstrate it |
 | *"AWS / React / Next.js"* | ❌ out of scope for this track |

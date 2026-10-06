@@ -37,7 +37,13 @@ THE FOUR DECISIONS THAT MAKE THIS A SERVICE RATHER THAN A WRAPPER
    the estimate rests on too few items. ⚠️ This is the *"uncertainty"* the JD asks for, and
    omitting it would let a client render "72% ready" from two answered questions.
 
-4. **Nothing is computed in the handler.** Every endpoint delegates to `irt`, `scheduler`,
+4. **The tutor answers from a fixed, inspectable corpus, or refuses.**
+   `POST /explain` submits a *wrong answer* and returns a named misconception, an explanation
+   and the approved passage it came from — or an explicit abstention because the syllabus does
+   not cover it. ⚠️ `GET /content/sources` exists so the approved set is enumerable, because
+   *"grounded in validated sources"* is only meaningful if the sources are fixed.
+
+5. **Nothing is computed in the handler.** Every endpoint delegates to `irt`, `scheduler`,
    `competency` and `selector`, which are independently tested. A service layer with logic in
    it is a second implementation, and the two drift.
 
@@ -76,8 +82,10 @@ from typing import Literal
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from competency import Bank, default_bank
+from retrieval import Index, Passage
 from selector import (DEFAULT_WEIGHTS, CandidateState, score_item, select)
 from scheduler import DEFAULT_TARGET, next_interval, retrievability
+from tutor import Tutor, default_explainer, load_questions
 
 try:
     from fastapi import FastAPI, HTTPException
@@ -87,6 +95,14 @@ except ImportError:                                            # pragma: no cove
     FASTAPI_AVAILABLE = False
 
 BANK: Bank = default_bank()
+
+#: The retrieval index and the tutor, built once at import. ⚠️ At this corpus size that is a few
+#: milliseconds; `device-search` measures the same pattern at **351 seconds** over 859,569
+#: documents, which is why it moved its index into the database. The approved syllabus is
+#: curated and small by construction, so in-process is the right trade here and the wrong one at
+#: scale — see `retrieval.Index`.
+INDEX = Index()
+TUTOR = Tutor(index=INDEX)
 
 
 # =============================================================================
@@ -167,6 +183,39 @@ if FASTAPI_AVAILABLE:
         basis: Literal["measured", "cold_start"]
         explanation: str
         note: str = ""
+
+    class ExplainRequest(BaseModel):
+        item_id: str = Field(..., description="an item id with authored content, e.g. q-002")
+        chosen: str = Field(..., description="the option the candidate picked, e.g. B")
+
+        @field_validator("chosen")
+        @classmethod
+        def single_option(cls, v):
+            v = v.strip().upper()
+            if len(v) != 1 or not v.isalpha():
+                raise ValueError(f"chosen must be a single option letter, got {v!r}")
+            return v
+
+    class Citation(BaseModel):
+        passage_id: str
+        source: str
+
+    class ExplainResponse(BaseModel):
+        item_id: str
+        chosen: str
+        correct: str
+        #: ⚠️ AUTHORED BY A SUBJECT EXPERT, NOT GENERATED. See `tutor.py` — a model that could
+        #: invent the diagnosis would be telling candidates they misunderstood something they did
+        #: not, which is the failure mode an educational product cannot ship.
+        misconception: str
+        explanation: str
+        citations: list[Citation]
+        grounded: bool
+        abstained: bool
+        #: ⚠️ "template" or "llm". A client must be able to tell whether a model was involved,
+        #: and a reviewer with no API key must still be able to exercise the endpoint.
+        generator: str
+        reason: str = ""
 
     class ScheduleItem(BaseModel):
         item_id: str
@@ -330,6 +379,55 @@ if FASTAPI_AVAILABLE:
                  ("Cold start: this candidate has no history, so the pick rests on the prior "
                   "and exam weighting rather than on evidence. Treat it as a starting point."))
 
+    @app.get("/content/sources")
+    def content_sources() -> dict:
+        """⚠️ **The approved content, listed.** This endpoint is why the tutor is not a chatbot.
+
+        *"Grounded in reliable and validated sources"* is only a meaningful claim if the set of
+        sources is **fixed and inspectable** — a system that answers from whatever document it is
+        handed cannot make it. So a reviewer can enumerate exactly what the tutor is permitted to
+        teach from, and check that a citation resolves to something in this list.
+        """
+        return {
+            "approved_passages": [
+                {"passage_id": p.id, "source": p.source, "characters": len(p.text)}
+                for p in INDEX.passages
+            ],
+            "authored_questions": sorted(TUTOR.questions),
+            "note": (
+                f"{len(INDEX.passages)} approved passages and "
+                f"{len(TUTOR.questions)} authored questions. ⚠️ The engine holds "
+                f"{len(BANK.items)} items; the rest have calibrated parameters but no authored "
+                f"question text, because writing a distractor and naming the misconception it "
+                f"encodes is subject-expert work. That gap is the real bottleneck in this "
+                f"product, not the AI."
+            ),
+        }
+
+    @app.post("/explain", response_model=ExplainResponse)
+    def explain(req: ExplainRequest) -> ExplainResponse:
+        """**Why the answer was wrong** — grounded in an approved passage, or a refusal.
+
+        ⚠️ Submit a *wrong answer*, not a corpus. The corpus is fixed and pre-approved, because
+        grounding is a promise about **which sources** an answer may come from.
+
+        ⚠️ **The test that distinguishes this from a document chatbot: send the same `item_id`
+        with two different `chosen` values and you get two different misconceptions.** A language
+        model cannot do that, because it does not know which option the candidate ticked. This is
+        distractor analysis, and it is what the role means by *"identify the reasons behind
+        incorrect answers"*.
+        """
+        if req.item_id not in TUTOR.questions:
+            raise HTTPException(
+                status_code=404,
+                detail=(f"no authored content for {req.item_id!r}. "
+                        f"GET /content/sources for the {len(TUTOR.questions)} items that have it."))
+        try:
+            e = TUTOR.explain(req.item_id, req.chosen, explainer=default_explainer())
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return ExplainResponse(**e.as_dict())
+
     @app.post("/schedule", response_model=ScheduleResponse)
     def schedule(req: RecommendRequest) -> ScheduleResponse:
         """When each attempted item is next due, and its current recall probability."""
@@ -440,7 +538,46 @@ def selftest() -> int:
           http_body["terms"] == lib_pick.terms,
           "the explanation is the real decomposition, not a re-derivation")
 
-    # ---- 8. scheduling reports recall probability ------------------------
+    # ---- 8. ⚠️ THE TEST THAT PROVES IT IS NOT A CHATBOT -------------------
+    src = client.get("/content/sources")
+    check("GET /content/sources lists the approved corpus",
+          src.status_code == 200 and len(src.json()["approved_passages"]) >= 8,
+          f"{len(src.json()['approved_passages'])} approved passages")
+
+    # ⚠️ SAME QUESTION, TWO WRONG ANSWERS, TWO DIAGNOSES. This is the assertion a generic
+    # "chat with your docs" system cannot satisfy, and it is the reason the endpoint exists.
+    b = client.post("/explain", json={"item_id": "q-002", "chosen": "B"}).json()
+    c = client.post("/explain", json={"item_id": "q-002", "chosen": "C"}).json()
+    check("the same question with two distractors yields two different diagnoses",
+          b["misconception"] != c["misconception"] and b["explanation"] != c["explanation"],
+          f"B → {b['misconception'][:34]!r}…")
+    check("both explanations carry a resolvable citation",
+          b["grounded"] and c["grounded"] and bool(b["citations"]) and bool(c["citations"]))
+
+    approved = {p["passage_id"] for p in src.json()["approved_passages"]}
+    check("every citation resolves to a passage in /content/sources",
+          all(cit["passage_id"] in approved for cit in b["citations"] + c["citations"]),
+          "a citation that does not resolve is not a citation")
+
+    # ⚠️ and a wrong answer to a DIFFERENT question cites a DIFFERENT passage
+    other = client.post("/explain", json={"item_id": "q-008", "chosen": "A"}).json()
+    check("a different question cites a different passage",
+          other["citations"][0]["passage_id"] != b["citations"][0]["passage_id"],
+          f"{b['citations'][0]['passage_id']} vs {other['citations'][0]['passage_id']}")
+
+    # ⚠️ A CORRECT ANSWER IS NOT AN ERROR TO EXPLAIN.
+    right = client.post("/explain", json={"item_id": "q-002", "chosen": "A"}).json()
+    check("answering correctly produces no misconception",
+          right["misconception"] == "" and right["generator"] == "none")
+
+    # ⚠️ VALIDATION REJECTS, AGAIN.
+    check("an option letter that does not exist is 422",
+          client.post("/explain", json={"item_id": "q-002", "chosen": "Z"}).status_code == 422)
+    check("an item with no authored content is 404 with a pointer",
+          client.post("/explain", json={"item_id": "q-033", "chosen": "A"}).status_code == 404,
+          "q-033 is in the bank but has no authored question text")
+
+    # ---- 9. scheduling reports recall probability ------------------------
     sch = client.post("/schedule", json={"candidate_id": "p", "attempts": attempts, "day": 1})
     check("POST /schedule returns an interval per attempted item",
           sch.status_code == 200 and len(sch.json()["items"]) == len(attempts))

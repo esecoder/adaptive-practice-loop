@@ -1,0 +1,155 @@
+{
+  "_comment": [
+    "Authored question content, keyed by the item ids in competency.py.",
+    "",
+    "⚠️ THIS FILE IS THE EXPERT-AUTHORING BOTTLENECK, MADE VISIBLE. The engine handles all 34",
+    "items in the bank; this file holds authored content for 8 of them. That is not laziness —",
+    "writing a distractor and naming the misconception it encodes is subject-expert work, and it",
+    "is the scarce resource in this product, not the AI.",
+    "",
+    "⚠️ `misconceptions` maps each WRONG option to the specific error it encodes. This is",
+    "distractor analysis, and it is what makes the tutor not a chatbot: the same question with two",
+    "different wrong answers must produce two different explanations, and no language model can do",
+    "that from the question alone — it does not know which option the candidate picked.",
+    "",
+    "⚠️ The misconception LABEL is authored by a human and is authoritative. The generated part is",
+    "the prose that explains it, grounded in a cited passage. A model is not allowed to invent the",
+    "diagnosis."
+  ],
+
+  "q-001": {
+    "stem": "A search system returns nothing for the query `ERR_AUTH_1180` even though that exact string appears in twelve documents. The system uses dense embeddings only. What is the most likely cause?",
+    "options": {
+      "A": "The index was not rebuilt after the documents were added",
+      "B": "The embedding model maps the identifier toward its neighbourhood of meaning, so it is not retrievable as a literal",
+      "C": "The query is too short for cosine similarity to be meaningful",
+      "D": "The documents were added with the wrong metadata filter"
+    },
+    "answer": "B",
+    "concept": "k-hybrid",
+    "misconceptions": {
+      "A": "reaches for an operational cause (a stale index) before a representational one, without checking whether the string is in the corpus",
+      "C": "believes similarity degrades with short queries, when length is not what breaks identifier matching",
+      "D": "attributes a ranking failure to a filter, when a filter being wrong would exclude whole documents rather than one string"
+    }
+  },
+
+  "q-002": {
+    "stem": "You want to combine a BM25 ranking with a cosine-similarity ranking. Why is summing the two scores unsafe?",
+    "options": {
+      "A": "BM25 scores are unbounded while cosine is bounded to [-1, 1], so the larger-scale scorer dominates and the dominance changes as the corpus grows",
+      "B": "Cosine similarity is negative for unrelated documents, which cancels out the BM25 contribution",
+      "C": "BM25 and cosine measure different things, so their sum has no units",
+      "D": "The two scores are computed over different document sets"
+    },
+    "answer": "A",
+    "concept": "k-fusion",
+    "misconceptions": {
+      "B": "attributes the problem to a sign cancellation that does not occur, rather than to the difference in scale",
+      "C": "states a units objection, which is true in spirit but is not the mechanism that makes the sum unsafe in practice",
+      "D": "assumes the scorers see different candidate sets, when the fusion step is given the same corpus"
+    }
+  },
+
+  "q-006": {
+    "stem": "A retrieval system always returns its top five passages. For a question the corpus cannot answer, what should it do?",
+    "options": {
+      "A": "Return the five closest passages and let the caller judge relevance",
+      "B": "Return an empty list and raise an error, because the question is invalid",
+      "C": "Return an explicit 'not covered' result, because similarity is relative and always produces confident-looking neighbours",
+      "D": "Lower the similarity threshold until at least one passage is returned"
+    },
+    "answer": "C",
+    "concept": "k-abstain",
+    "misconceptions": {
+      "A": "leaves the sufficiency judgement to a caller who has only the scores — which is the problem, since the scores do not separate answerable from unanswerable",
+      "B": "treats an unanswerable question as an error, when refusing is the correct answer rather than a failure",
+      "D": "resolves an abstention by weakening the threshold, which guarantees an answer and therefore guarantees wrong ones"
+    }
+  },
+
+  "q-008": {
+    "stem": "A 946 KB document is passed to a chunker and the encoder has a 512-token limit. What is the failure mode if the chunker cannot split a single large unit?",
+    "options": {
+      "A": "The encoder raises an error and the document is skipped",
+      "B": "The chunk is stored whole and the encoder embeds only the beginning, so the rest is in the index but invisible to retrieval",
+      "C": "The document is split at the token limit automatically by the encoder",
+      "D": "Retrieval works but is slower because chunks are larger"
+    },
+    "answer": "B",
+    "concept": "k-chunksize",
+    "misconceptions": {
+      "A": "expects a loud failure, when the measured behaviour is silent and every evaluation still passes",
+      "C": "assumes the encoder truncates for you in a way that preserves retrieval, which is the belief that hides the bug",
+      "D": "expects a performance cost rather than a correctness cost, which is the wrong axis entirely"
+    }
+  },
+
+  "q-010": {
+    "stem": "You store character offsets for each chunk so a citation can highlight the source text. Which invariant must hold?",
+    "options": {
+      "A": "The chunk text must be lexicographically greater than the previous chunk's",
+      "B": "Chunk IDs must be stable across re-indexing",
+      "C": "The chunk text must equal the document slice at its recorded offsets",
+      "D": "The chunk must not contain any newline characters"
+    },
+    "answer": "C",
+    "concept": "k-offsets",
+    "misconceptions": {
+      "A": "confuses ordering with correspondence — chunks can be ordered correctly and still point at the wrong text",
+      "B": "addresses index stability, which matters for caching but does not make a citation correct",
+      "D": "imposes a formatting rule unrelated to whether offsets map back to the source"
+    }
+  },
+
+  "q-021": {
+    "stem": "Two reviewers agree on 88.9% of their ratings, but one of them gives the same score to every single item. How should this be interpreted?",
+    "options": {
+      "A": "The agreement is high, so the rubric is reliable",
+      "B": "The agreement is high but chance-corrected agreement is near zero, so the measurement carries no information",
+      "C": "The constant rater should be dropped and the remaining rater's scores used",
+      "D": "The agreement figure needs a larger sample before it means anything"
+    },
+    "answer": "B",
+    "concept": "k-anchors",
+    "misconceptions": {
+      "A": "treats raw agreement as a measurement, which is exactly what chance correction exists to prevent",
+      "C": "removes the rater rather than recognising that agreement was never informative in the first place",
+      "D": "prescribes more data for a problem that more data will not fix — the agreement is chance agreement at any sample size"
+    }
+  },
+
+  "q-022": {
+    "stem": "An automated judge agrees with human raters 90% of the time on adjacent scores. What must be checked before using it to gate releases?",
+    "options": {
+      "A": "Whether the judge's average score matches the human average",
+      "B": "Whether the judge can detect the specific case that must fail, which is a different measurement from average agreement",
+      "C": "Whether the judge runs fast enough to be used in CI",
+      "D": "Whether the judge's prompt is shorter than the context limit"
+    },
+    "answer": "B",
+    "concept": "k-veto",
+    "misconceptions": {
+      "A": "checks calibration, which can be perfect while the judge cannot fail a release that must be failed",
+      "C": "optimises throughput before establishing that the signal is valid",
+      "D": "addresses an operational constraint rather than whether the judge is usable at all"
+    }
+  },
+
+  "q-027": {
+    "stem": "The first search against a newly started service takes 351 seconds and later searches take milliseconds. What is the most likely explanation?",
+    "options": {
+      "A": "A cold disk cache, which would resolve after the first few queries",
+      "B": "An in-process index that is built on first use and lives in memory, so the cost is paid again on every restart",
+      "C": "A missing database index, which would make all queries slow rather than only the first",
+      "D": "Connection pool warm-up in the retrieval client"
+    },
+    "answer": "B",
+    "concept": "k-batch",
+    "misconceptions": {
+      "A": "explains one slow query but not the recurrence of the cost after every process restart",
+      "C": "predicts uniform slowness, which contradicts the measurement that later queries are fast",
+      "D": "attributes a one-off 351-second cost to connection setup, which is orders of magnitude too small"
+    }
+  }
+}

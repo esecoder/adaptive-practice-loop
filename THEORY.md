@@ -1,12 +1,16 @@
-# THEORY — the three ideas, in plain English
+# THEORY — the core ideas, in plain English
 
-You asked three things: explain **item response theory**, explain **spaced-repetition
-scheduling**, and explain the **adaptive practice loop** clearly — including whether it closes
-the "recommendation / adaptive learning" gap or is something else entirely.
+Four ideas, in plain English:
 
-The third question has a precise answer and it is at the end. Read §1 and §2 first; they are
-the two mechanisms, and the answer in §3 is that the job description's own sentence is a
-formula built from them.
+| § | Idea | The one-line version |
+|---|---|---|
+| 1 | **Item response theory** | "3 out of 4" is not a measurement — it conflates ability with item difficulty |
+| 2 | **Spaced repetition** | a TTL policy for human memory, with a learned decay |
+| 3 | **The adaptive loop** | the JD's own sentence is a **ranking function**; the adaptive loop *is* a recommender system |
+| 4 | **The explanation engine** | why the answer was wrong — grounded, cited, or refused |
+
+Read §1 and §2 first; they are the two mechanisms, and §3 shows the job description's own words
+are a formula built from them.
 
 ---
 
@@ -281,6 +285,86 @@ whole model.**
 rate and competency structure I chose. The simulation can show a selector is *internally*
 inconsistent; it cannot show any policy helps a person. That limitation is stated in the code
 rather than buried.
+
+---
+
+## 4. Why the answer was wrong — the explanation engine
+
+### The problem it solves
+
+A candidate gets question 7 wrong. **"The answer is A" teaches them nothing.** They need to know
+*which specific misunderstanding led them to B*, and they need to be able to check that the
+explanation is right.
+
+### ⚠️ Why this is not "chat with your documents"
+
+The obvious version of this feature is: let the user upload a PDF and ask questions. **That is the
+single most commoditised AI demo there is, and it is the wrong product.** Here is why, in one
+sentence:
+
+> *"Grounded in reliable and validated sources"* is only a meaningful promise if **the set of
+> sources is fixed.** A system that will answer from whatever document it is handed has no notion
+> of a validated source — it can only promise that the text appeared *somewhere*.
+
+So the corpus is **approved and shipped with the code**, and `GET /content/sources` lets anyone
+enumerate exactly what the tutor is allowed to teach from.
+
+### The test that proves it, and it takes one call
+
+**Ask the same question with two different wrong answers.** You must get two different diagnoses:
+
+```
+q-002, chosen "B"  →  "attributes the problem to a sign cancellation that does not occur"
+q-002, chosen "C"  →  "states a units objection, which is true in spirit but is not the
+                       mechanism that makes the sum unsafe"
+```
+
+⚠️ **A language model cannot do this from the question alone, because it does not know which
+option the candidate ticked.** This is **distractor analysis** — the technique where each wrong
+option is authored to encode a specific misconception — and it is what the job description means
+by *"identify the reasons behind incorrect answers."*
+
+**Comparison you know:** it is a **linter with named rules, not a spell-checker.** A spell-checker
+says "wrong". A linter says *"this is `no-unused-vars`, here is the line, and here is the rule."*
+The value is in the **name**, because a named rule is one you can look up, argue with, and fix.
+
+### The two hard gates
+
+**1. No source, no answer.** If the approved content does not cover the question, the tutor
+**refuses**. It does not fall back on the model's general knowledge — that is the failure that
+makes an educational product unsafe, because a confident wrong explanation is worse than silence.
+
+**2. ⚠️ A citation the model invented is rejected, not displayed.** The model may cite only
+passage ids that retrieval actually returned. ⚠️ This is enforced **in code after the call**, not
+requested in the prompt. **A prompt instruction is a preference; a validator is a guarantee** —
+and an unvalidated citation is how a grounded system quietly becomes an ungrounded one while
+still looking grounded.
+
+### ⚠️ And the thing that took three attempts
+
+The sufficiency gate — *"is this question in the syllabus?"* — is harder than it looks, because
+**the expert who writes the misconception and the expert who writes the syllabus are different
+people writing at different times, and their vocabulary will not match.**
+
+| Attempt | What broke | Measured |
+|---|---|---|
+| Coverage over the whole query | An expert wrote *"states a **units** objection"*; the syllabus never uses "units" | **32% → 22%** → refused a question whose passage had already ranked **first** |
+| Gate on the question stem alone | A scenario-style stem is mostly scenario words | **3 of 8** questions abstained |
+| **Corpus-known terms only** | ✅ | **100%** on the first case; a framing-only question is still refused |
+
+**The abstraction that fixed it:** coverage should measure *"of the words this corpus understands,
+how many does this passage use?"* — not *"how many of the author's words appear in the corpus"*.
+
+⚠️ And the failure mode had a shape worth remembering: **the refusal looks like a content gap, not
+a wording mismatch.** Nobody debugs "the syllabus doesn't cover this" by checking whether the
+expert used a synonym.
+
+### ⚠️ The bottleneck is not the AI
+
+The engine holds **34 items**. The repository has authored content for **8**. Writing a distractor
+and naming the misconception it encodes is **subject-expert work**, and that is the scarce
+resource in this product. A team that thinks the hard part is the model will ship a tutor that
+explains four questions beautifully and has nothing to say about the other thirty.
 
 ---
 
