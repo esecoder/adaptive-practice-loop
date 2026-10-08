@@ -328,6 +328,83 @@ anything is installed — the same rule the rest of this repository follows.
 
 ---
 
+## The idempotent write path (`idempotency.py`)
+
+    python src/idempotency.py --selftest           # 22 checks, single process
+    python tests/test_idempotency_http.py          # 14 checks, through the server
+
+⚠️ **The problem.** A client sends a write, the network drops the response, and the
+client retries — correctly, because it cannot know whether the write happened. A
+naive server records the answer twice and every number downstream is wrong. This is
+the defining problem of a payments system: **a retried transfer must not send money
+twice.**
+
+### The four rules
+
+| Situation | Behaviour |
+|---|---|
+| Same key, same payload | return the **original response**, do not execute again |
+| Same key, **different** payload | **409 conflict** — a key identifies one request |
+| Same key, still in flight | **409** — a second write must not start |
+| No key | executes every time, and says so |
+
+⚠️ Rule 2 is the one most implementations get wrong. Returning the stored response
+would silently discard the second request's intent; writing again would double-apply
+under one key. It is a conflict, not a replay.
+
+⚠️ It is not "check if it exists, then write". That has a race: two requests with
+the same key both look, both find nothing, both write. The claim is a separate
+committed transaction, so a concurrent request can **see** it.
+
+### Measured, over HTTP
+
+```
+first call            200  written=True   replayed=False
+4 retries             replayed=[True, True, True, True]  written=[False, ...]
+5 calls total         -> 1 attempt row
+same key, new body    409  conflict
+no key                200  written=True   (not idempotent, by design)
+```
+
+**Six HTTP calls for one answer produced two attempt rows** — one keyed, one
+deliberately unkeyed. The four retries wrote nothing and returned the original
+response.
+
+### Reconciliation
+
+    GET /reconcile
+
+⚠️ **This is the half that gets skipped.** An idempotency key prevents the *known*
+retry; reconciliation catches the ones nobody saw. It reports:
+
+| Finding | Meaning |
+|---|---|
+| `double_applied` | ⚠️ two attempts under one key — the failure the module prevents |
+| `stuck` | claimed, never completed — a process died between the two phases |
+| `ghost` | marked done with no attempt behind it |
+| `unkeyed` | attempts written with no key — not wrong, but visible |
+
+### ⚠️ Three bugs, and only the HTTP test found them
+
+The module selftest passed the whole time. It runs single-threaded, in one process,
+and never crossed a thread or a request boundary.
+
+1. **`SQLite objects created in a thread can only be used in that same thread.`**
+   FastAPI runs a *synchronous* endpoint in a threadpool, so a connection made at
+   import time is used from a worker thread. Fixed with a connection per thread.
+2. **`no such table: idempotency_keys`.** With a connection per thread, the schema
+   created on the bootstrap thread does not exist for the worker. Every new
+   connection now creates it — `IF NOT EXISTS`, so it is free after the first time.
+3. ⚠️ **Every retry WROTE AGAIN, with no error at all.** The store was `":memory:"`,
+   and an in-memory database is **per connection** — so each worker thread had its
+   own empty database, the lookup never found anything, and every response honestly
+   said `written=True`.
+
+⚠️ Failures 1 and 2 raise. Failure 3 returns **200 and looks correct**. That is the
+shape of bug that costs money: nothing crashes, the dashboard is green, and the
+write happened twice. **A module selftest proves the logic; only a test through the
+server proves the wiring.**
+
 ## ⚠️ What is NOT verified
 
 - **No real candidate data.** The learner is simulated, with memory, a learning rate and a

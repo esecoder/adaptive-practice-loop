@@ -86,9 +86,14 @@ from retrieval import Index, Passage
 from selector import (DEFAULT_WEIGHTS, CandidateState, score_item, select)
 from scheduler import DEFAULT_TARGET, next_interval, retrievability
 from tutor import Tutor, default_explainer, load_questions
+from idempotency import (
+    IdempotencyConflict,
+    IdempotencyInFlight,
+    IdempotencyStore,
+)
 
 try:
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI, Header, HTTPException
     from pydantic import BaseModel, Field, field_validator
     FASTAPI_AVAILABLE = True
 except ImportError:                                            # pragma: no cover
@@ -116,6 +121,24 @@ if FASTAPI_AVAILABLE:
         item_id: str = Field(..., description="an item id from /bank/items")
         correct: bool
         day: float = Field(..., ge=0, description="days since the candidate started")
+
+    class AttemptWrite(BaseModel):
+        """The body of a write. ⚠️ The idempotency key is NOT in here.
+
+        It travels as a header, because it describes the REQUEST rather than the
+        record — and because a key in the body is a key a client can forget to
+        change while changing nothing else."""
+        candidate_id: str = "anonymous"
+        item_id: str = Field(..., description="an item id from /bank/items")
+        correct: bool
+        day: float = Field(..., ge=0)
+
+    class AttemptWriteResponse(BaseModel):
+        written: bool = Field(..., description="True if this call did the write")
+        replayed: bool = Field(..., description="True if this was a replay of an earlier call")
+        attempt_id: int | None = None
+        idempotency_key: str | None = None
+        note: str
 
     class ReadinessRequest(BaseModel):
         candidate_id: str = "anonymous"
@@ -446,6 +469,83 @@ if FASTAPI_AVAILABLE:
             note=(f"Intervals target {DEFAULT_TARGET:.0%} recall. ⚠️ That target is not "
                   "achievable at a daily review cadence for items with stability below about "
                   "one day — see scheduler.py's selftest, which measures the gap."))
+
+
+    # ── idempotent write ────────────────────────────────────────────────────
+    #
+    # ⚠️ THE POINT OF THIS ENDPOINT. A client whose response was lost will retry,
+    # and a retry must not record the answer twice. The key travels in a header;
+    # a call without one is allowed but is NOT idempotent, and says so.
+
+    if "IDEMPOTENCY_STORE" not in globals():
+        # ⚠️ NO ":memory:" HERE. A connection is per-thread (FastAPI runs sync
+        # endpoints in a threadpool), and an in-memory database is PER CONNECTION —
+        # so ":memory:" gives every worker thread its own empty database, the
+        # idempotency lookup never finds anything, and every retry writes again.
+        #
+        # ⚠️ It failed exactly that way, silently: all responses said written=True,
+        # no error was raised, and reconciliation reported zero attempts on a table
+        # that had been written to from another thread. ⚠️ The module docstring
+        # warns about this. I still did it.
+        IDEMPOTENCY_STORE = IdempotencyStore()                       # noqa: F821
+
+    @app.post("/attempts", response_model=AttemptWriteResponse)
+    def write_attempt(                                   # noqa: F811
+        req: AttemptWrite,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    ) -> AttemptWriteResponse:
+        """Record one answer, at most once per idempotency key."""
+        payload = {"candidate_id": req.candidate_id, "item_id": req.item_id,
+                   "correct": req.correct, "day": req.day}
+
+        def operation() -> dict:
+            # the real write would go here; the store records the attempt row
+            return {"candidate_id": req.candidate_id, "item_id": req.item_id,
+                    "correct": req.correct}
+
+        try:
+            outcome = IDEMPOTENCY_STORE.execute(                 # noqa: F821
+                idempotency_key, payload, operation,
+                learner_id=req.candidate_id, question_id=req.item_id,
+                correct=req.correct,
+            )
+        except IdempotencyConflict as e:
+            # ⚠️ 409, not 200. The same key was used for a DIFFERENT body. Returning
+            # the first response would silently discard this request; writing again
+            # would double-apply under one key.
+            raise HTTPException(status_code=409, detail=f"idempotency conflict: {e}")
+        except IdempotencyInFlight as e:
+            # ⚠️ 409 again, and a client should retry AFTER the first attempt
+            # resolves. 202 with a "still processing" body would invite a retry
+            # storm, which is how a stuck key becomes an outage.
+            raise HTTPException(status_code=409, detail=f"idempotency in flight: {e}")
+
+        return AttemptWriteResponse(
+            written=outcome.executed,
+            replayed=outcome.replayed,
+            attempt_id=outcome.attempt_id,
+            idempotency_key=idempotency_key,
+            note=("replayed the original response; no second write"
+                  if outcome.replayed else
+                  "no Idempotency-Key supplied — this call is NOT idempotent, "
+                  "and a retry would write twice" if idempotency_key is None else
+                  "written once; a retry with this key will replay this response"),
+        )
+
+    @app.get("/reconcile")
+    def reconcile() -> dict:
+        """⚠️ The half that gets skipped.
+
+        An idempotency key prevents the KNOWN retry. This reports the ones nobody
+        saw — a key claimed but never completed, a key marked done with no write
+        behind it, and the one that matters most: two writes under one key.
+        """
+        findings = IDEMPOTENCY_STORE.reconcile()                    # noqa: F821
+        return {
+            "findings": findings,
+            "clean": not any(v for k, v in findings.items() if k != "unkeyed"),
+            "attempts": IDEMPOTENCY_STORE.attempt_count(),           # noqa: F821
+        }
 
 
 # =============================================================================
