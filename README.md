@@ -405,6 +405,74 @@ shape of bug that costs money: nothing crashes, the dashboard is green, and the
 write happened twice. **A module selftest proves the logic; only a test through the
 server proves the wiring.**
 
+## The same retrieval, in LangChain (`langchain_pipeline.py`)
+
+    python src/langchain_pipeline.py --selftest     # 18 checks
+    python src/langchain_pipeline.py --parity       # the comparison table
+
+⚠️ **This is not a rewrite. It is a comparison, and the comparison is the
+deliverable.** `retrieval.py` already does hybrid retrieval with a hand-rolled BM25
+and a coverage gate. The question is not *"can it be done in LangChain"* — obviously
+it can — but **"what does the framework buy, and what does it cost?"**
+
+What LangChain provides: `Document` for the corpus, `BM25Retriever` as a second
+independent BM25, `BaseRetriever` for adapting our index, and RRF composed on top.
+
+### ⚠️ Measured: LangChain's retriever cannot abstain
+
+The most useful row is a query that shares **no term** with the corpus — no passage
+contains `abstain`, `abstention` or `tutor`:
+
+```
+"when should the tutor abstain"
+
+  our Index            -> []            (it filters score == 0)
+  LangChain BM25       -> 3 passages    (none contain the terms)
+  raw rank_bm25 scores -> all 10 non-zero, max 2.708
+```
+
+⚠️ **LangChain's retriever returns k documents for any query, including one the
+corpus has never seen.** Abstention is the product decision this repository is built
+around — it is what stops the tutor inventing an answer — and **a retriever that
+always returns k makes abstention undetectable downstream, because there is nothing
+to detect.**
+
+⚠️ That is a property of the retriever, not a defect in the framework. It is the kind
+of thing a comparison finds and a rewrite removes. Pinned as a test, so a future
+version that starts abstaining fails loudly instead of changing this quietly.
+
+### Parity, over the same queries
+
+| | |
+|---|---|
+| Adapter path identical to a direct call | **5/5** |
+| LangChain BM25 agrees on the top-1 | 4/5 |
+| LangChain BM25 agrees on the whole set | **1/5** |
+
+⚠️ The second and third rows are the point. **Two retrievers that agree because they
+are the same retriever add nothing to a fusion.** Different tokenisers and different
+`k1`/`b` produce genuinely different rankings, and RRF is what turns that into a
+strength rather than a conflict.
+
+⚠️ The adapter row is the only place an equality assertion is honest: it wraps
+`Index.search` and holds no logic of its own, so if it ever disagrees the fault is in
+the adapter or the framework — never in the ranking.
+
+### Why RRF is composed here, not `EnsembleRetriever`
+
+1. `EnsembleRetriever` moved out of `langchain-community` to the main `langchain`
+   meta-package. Pulling that for one class is a poor trade when the algorithm is
+   fifteen lines.
+2. ⚠️ **RRF keeps ranks and discards scores, which is exactly why it works.** BM25
+   scores and cosine similarities are not on a comparable scale — `device-search`
+   measured a garbage query at 0.649 cosine against 0.632 for the worst *real* match
+   — so score-level fusion is fusing noise. Writing it here makes that visible and
+   puts the k constant somewhere it can be justified (60, from the original paper).
+
+⚠️ `langchain-community` also emits a deprecation warning: it is being sunset in
+favour of standalone integration packages. The ecosystem is mid-reorganisation,
+which is a reason to depend on less of it.
+
 ## ⚠️ What is NOT verified
 
 - **No real candidate data.** The learner is simulated, with memory, a learning rate and a

@@ -7,3 +7,14 @@ fastapi>=0.115
 uvicorn>=0.30
 pydantic>=2.0
 httpx>=0.27        # only for the API self-test (TestClient)
+
+# ⚠️ OPTIONAL, and it is a COMPARISON rather than a dependency. `src/langchain_pipeline.py`
+# re-expresses retrieval.py's hybrid retrieval in LangChain so the two can be run over
+# the same corpus and queries side by side. The direct implementation stays and is the
+# one this project depends on.
+#
+# ⚠️ langchain-community emits a deprecation warning: it is being sunset in favour of
+# standalone integration packages. Worth knowing before depending on more of it.
+langchain-core>=1.0
+langchain-community>=0.4
+rank_bm25>=0.2
