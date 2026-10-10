@@ -24,3 +24,12 @@ rank_bm25>=0.2
 # `pip install` down with it, which is how it was noticed.
 #   faiss-cpu 1.10.0  wheel 3.2 MB  ·  installed 13 MB
 faiss-cpu==1.10.0; sys_platform != "win32"
+
+# ⚠️ Only for tests/test_pgvector.py, which SKIPS CLEANLY when no server is reachable.
+# A test that goes red in an environment without Docker is a test that gets deleted
+# by someone who never had the dependency.
+#
+#   docker run -d --name pgvector-idx -e POSTGRES_PASSWORD=test \
+#     -e POSTGRES_DB=vectors -p 5433:5432 pgvector/pgvector:pg16
+#   docker stop pgvector-idx && docker rm pgvector-idx      # when finished
+psycopg2-binary>=2.9

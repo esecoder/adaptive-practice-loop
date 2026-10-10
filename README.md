@@ -473,6 +473,81 @@ the adapter or the framework — never in the ranking.
 favour of standalone integration packages. The ecosystem is mid-reorganisation,
 which is a reason to depend on less of it.
 
+## Vector search: exact, approximate, and a real Postgres
+
+    python src/vector_index.py --selftest      # 17 checks, stable across runs
+    python src/vector_index.py --curve         # FAISS recall vs latency
+    python tests/test_pgvector.py              # parity against pgvector (skips without one)
+
+### FAISS
+
+⚠️ **This measures the INDEX, not the embeddings.** FAISS has no opinion about
+whether "nearest" means anything useful, so a recall figure over vectors that
+represent nothing is not a claim about retrieval quality. The vectors here are
+generated deterministically — the property under test is the index's behaviour, and
+that is independent of where the vectors came from.
+
+**The hard property:** exact `IndexFlatIP` agrees with brute-force NumPy on **every
+query**. *"It's supposed to be exact"* is not a measurement, and an approximate
+index silently returning the wrong neighbour looks exactly like a correct one.
+
+```
+efSearch   recall@10    p50 ms    p95 ms
+      10      0.3190     0.044     0.060
+      64      0.7800     0.141     0.158
+     256      0.9930     0.377     0.445
+     512      1.0000     0.644     0.728
+```
+
+#### ⚠️ And the important part is what got measured wrong, twice
+
+| Asserted | Measured | |
+|---|---|---|
+| "a seeded HNSW run **is** reproducible" | 0.970 / 0.980 / 0.980 | ✗ |
+| "a seeded HNSW run is **not** reproducible" | 0.990 / 0.990 / 0.990 | ✗ |
+| "uniform vectors are easier for ANN" | clustered 0.610 / uniform 0.527 | ✗ |
+| "clustered is easier" (the correction) | clustered 0.573 / uniform 0.577 | ✗ |
+
+**Three measurements, three different directions.** Every one was a single reading
+of a noisy quantity.
+
+⚠️ Asserting any of them would have shipped a **flaky test and a false claim** — and a
+flaky test gets deleted, taking the measurement with it. The checks no longer assert
+a direction: they assert the effect **does not exceed its own noise** and report the
+spread. At this sample size there is no clustered-vs-uniform result to report, and
+clustering is chosen for **realism**, not difficulty.
+
+### pgvector
+
+⚠️ **A real server, not a re-implementation of myself.** The in-process index and
+pgvector were written by different people, in different languages, with different
+rounding and a different execution engine. **Parity between them is evidence that
+neither is wrong**; agreement with my own NumPy code is evidence of nothing.
+
+| Check | Result |
+|---|---|
+| Vectors round-trip bit-identically | **2000/2000**, max diff 0.000e+00 |
+| pgvector's exact top-10 == brute force | **25/25 queries** |
+| `<#>` is negative inner product | `[1,2,3] <#> [1,2,4] = -17.0` |
+| A wrong-length vector is refused, not truncated | ✅ |
+
+```
+pgvector 0.8.7, 2,000 vectors, 128 dims, recall@10
+ef_search   recall@10     p50 ms     p95 ms
+       10      0.4680      0.538      0.840
+       32      0.7800      0.617      0.865
+       64      1.0000      0.871      1.548
+      128      1.0000      0.834      1.073
+```
+
+⚠️ **Recall and latency are reported together, never separately** — the acceptance
+rule is that a latency number alone is meaningless, and it cuts both ways.
+
+⚠️ And parity is re-checked **with the HNSW index dropped**. If the planner had used
+the approximate index for an `ORDER BY <#>` query, the "exact" parity above would
+have been measuring an approximate index — and it would have passed, because the
+recall is high. That is the classic ANN benchmark error, and this check rules it out.
+
 ## ⚠️ What is NOT verified
 
 - **No real candidate data.** The learner is simulated, with memory, a learning rate and a
