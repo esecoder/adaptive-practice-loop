@@ -102,6 +102,15 @@ DRIVER = r"""
     const rs = document.querySelector("#corpusState").textContent;
     out.push("corpus-reset:" + (/bundled/.test(rs) ? "ok" : "WRONG:" + rs.slice(0, 30)));
 
+    // ---- ⚠️ THE NOTICE THAT SAYS WHICH CORPUS IS IN FORCE. If nobody pastes
+    // anything, the bundled syllabus is used — and the page must SAY so, or every
+    // answer looks like it came from the reviewer's own content when it did not.
+    const notice = txt("#corpusActive");
+    out.push("bundled-notice:" + (/bundled/i.test(notice) && /syllabus/i.test(notice) ? "ok" : "WRONG:" + notice.slice(0, 34)));
+    // ⚠️ and after a reset it must come back
+    document.querySelector("#corpusResetBtn").click(); await t(1200);
+    out.push("notice-after-reset:" + (/bundled/i.test(txt("#corpusActive")) ? "ok" : "WRONG"));
+
     out.push("errors:" + (window.__errs?.length ? window.__errs.join(";") : "none"));
   } catch (e) { out.push("EXCEPTION:" + e.message); }
   document.title = "RESULTS::" + out.join("|");
@@ -180,9 +189,9 @@ def main() -> int:
 
         dom = subprocess.run(
             [browser, "--headless=new", "--disable-gpu", "--no-sandbox",
-             "--virtual-time-budget=20000", "--dump-dom",
+             "--virtual-time-budget=60000", "--dump-dom",
              f"http://127.0.0.1:{port}/_harness2"],
-            capture_output=True, text=True, timeout=90,
+            capture_output=True, text=True, timeout=240,
         ).stdout
 
         m = re.search(r"<title>RESULTS::(.*?)</title>", dom, re.S)

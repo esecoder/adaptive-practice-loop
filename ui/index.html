@@ -126,6 +126,7 @@
       <span id="corpusState" style="color:var(--dim);font-size:12.5px"></span>
     </div>
     <div id="corpusOut"></div>
+    <div id="corpusActive" class="note" style="display:none"></div>
   </div>
 
   <!-- ── 1a. the tutor refuses — the panel that CAN abstain ────────────── -->
@@ -369,6 +370,19 @@ async function showCorpus() {
   $("#corpusState").textContent = c.passages
     ? `${c.name} · ${c.passages} passage(s) · ${c.characters.toLocaleString()} chars`
     : "";
+
+  // ⚠️ SAY WHICH CORPUS IS IN FORCE, WITHOUT BEING ASKED. If someone opens this page
+  // and does not paste anything, the bundled syllabus is used — and they must be TOLD
+  // that, or every answer below looks like it came from their own content when it did
+  // not. Naming the fallback is the difference between a demo and a misleading one.
+  const bundled = c.name === "bundled syllabus";
+  const el = $("#corpusActive");
+  el.style.display = "block";
+  el.innerHTML = bundled
+    ? `⚠️ <b>No document supplied — using my bundled 10-passage syllabus.</b>
+       Everything below answers from that. Paste your own text above to replace it.`
+    : `Answering from <b>${esc(c.name)}</b> — <b>${c.passages}</b> passage(s) you supplied.
+       The bundled syllabus is not in use.`;
   if (c.warning) {
     $("#corpusOut").innerHTML = `<div class="verdict no" style="display:block">
       <b>Small corpus</b>${esc(c.warning)}</div>`;
@@ -398,9 +412,10 @@ $("#corpusLoadBtn").addEventListener("click", async () => {
   // ⚠️ Load-time facts, so the reviewer knows what was built from their text before
   // they ask anything — including a warning if it is too small for the gate.
   v.innerHTML = `<div class="verdict ok" style="display:block">
-      <b>Loaded</b>${body.passages} passage(s) from ${body.characters.toLocaleString()}
-      characters, split by <code>${esc(body.chunker)}</code>.
-      §1 and §3 below now answer from this text.</div>`;
+      <b>Loaded — your content is now in force</b>
+      ${body.passages} passage(s) from ${body.characters.toLocaleString()} characters,
+      split by <code>${esc(body.chunker)}</code>.
+      ⚠️ §1 below answers from YOUR text now, not my syllabus.</div>`;
   await showCorpus();
   $("#corpusText").value = "";
 });
@@ -408,7 +423,7 @@ $("#corpusLoadBtn").addEventListener("click", async () => {
 $("#corpusResetBtn").addEventListener("click", async () => {
   await api("/corpus/reset", { method: "POST" });
   $("#corpusOut").innerHTML = `<div class="verdict" style="display:block">
-    Back to the bundled 10-passage syllabus.</div>`;
+    ⚠️ Your content was discarded. The bundled 10-passage syllabus is back in force.</div>`;
   await showCorpus();
 });
 
