@@ -77,6 +77,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
 from typing import Literal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -531,6 +532,17 @@ if FASTAPI_AVAILABLE:
                   "and a retry would write twice" if idempotency_key is None else
                   "written once; a retry with this key will replay this response"),
         )
+
+    # ⚠️ THE DEMO IS SERVED BY THE API IT CALLS, so there is no CORS problem, no
+    # second process, and no framework. One file, no build step, no CDN — a reviewer
+    # opens the URL and the page works offline.
+    @app.get("/", include_in_schema=False)
+    def demo():
+        from fastapi.responses import HTMLResponse
+        page = Path(__file__).resolve().parent.parent / "ui" / "index.html"
+        if not page.exists():                                        # pragma: no cover
+            return HTMLResponse("<h1>ui/index.html is missing</h1>", status_code=404)
+        return HTMLResponse(page.read_text(encoding="utf-8"))
 
     @app.get("/reconcile")
     def reconcile() -> dict:

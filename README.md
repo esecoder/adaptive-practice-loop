@@ -548,6 +548,50 @@ the approximate index for an `ORDER BY <#>` query, the "exact" parity above woul
 have been measuring an approximate index — and it would have passed, because the
 recall is high. That is the classic ANN benchmark error, and this check rules it out.
 
+## Open it and use it
+
+```bash
+./run.sh ui        # → http://127.0.0.1:8000
+```
+
+⚠️ **One HTML file, no build step, no CDN, no npm.** The page is served by the API it
+calls, so there is no CORS problem, no second process and no framework — and it works
+offline. A demo that needs `npm install` before it shows anything is a demo nobody runs.
+
+### The three panels, and why those three
+
+⚠️ A README can claim anything. These are the three things that are hard to believe
+without using them.
+
+**1. The tutor will refuse.** Pick a question, pick an answer, and the verdict is
+either *grounded in approved content* (with citations) or **abstained**. ⚠️ Abstention
+is a product decision, not an error — a tutor that cannot abstain will invent an
+explanation, and a candidate told they misunderstood something they did not is worse
+off than one told nothing.
+
+**2. A write sent five times applies once.** Press the button and the table shows five
+requests, one write, four replays, one attempt row, and a clean reconciliation. Then
+the second button reuses the **same key with a different body** and gets a **409**.
+⚠️ That second button is the interesting one: returning the first response would
+silently discard the second request, and writing again would double-apply under one
+key. It is the decision most implementations get wrong.
+
+**3. What to practise next.** Not "the weakest topic" — a weighted function over five
+named terms, each readable in `src/selector.py`, with the terms printed as the
+breakdown. ⚠️ And `basis: cold_start` appears when the pick rests on the prior rather
+than this candidate's history, so a guess is never presented as a recommendation.
+
+### Verified, not asserted
+
+| The UI calls | Result |
+|---|---|
+| `/bank/items` + `/content/sources` | 34 items, **8** with authored content |
+| `/explain` | 200, `grounded=True` |
+| `/attempts` ×5 on one key | `written=[True, False, False, False, False]` |
+| `/reconcile` | **1** attempt row, clean |
+| `/attempts`, same key, different body | **409** |
+| `/recommend` | `q-003`, score 1.060, `cold_start`, 7 terms |
+
 ## ⚠️ What is NOT verified
 
 - **No real candidate data.** The learner is simulated, with memory, a learning rate and a

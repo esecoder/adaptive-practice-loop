@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Adaptive Practice Loop — a working demo</title>
+<!--
+  ⚠️ ONE FILE, NO BUILD STEP, NO CDN.
+  Everything here is served by the FastAPI app it talks to, so it works offline and
+  a reviewer can read the whole thing. A demo that needs `npm install` before it
+  shows anything is a demo nobody runs.
+
+  ⚠️ The three panels are chosen to show the three things that are hard to believe
+  from a README:
+    1. the tutor REFUSES when the corpus does not cover the question
+    2. a write sent five times applies ONCE
+    3. the next item is chosen by a weighted function you can read
+-->
+<style>
+  :root{
+    --bg:#0f1419; --panel:#171d24; --line:#242c36; --ink:#e6edf3; --dim:#8b98a5;
+    --blue:#4a9eff; --green:#3fb950; --amber:#d29922; --red:#f85149;
+    --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  .wrap{max-width:1040px;margin:0 auto;padding:32px 24px 80px}
+  h1{font-size:24px;margin:0 0 4px} h2{font-size:15px;margin:0 0 2px;letter-spacing:.02em}
+  .sub{color:var(--dim);font-size:14px;margin:0 0 28px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+         padding:20px;margin-bottom:20px}
+  .panel > .why{color:var(--dim);font-size:13px;margin:0 0 16px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  select,button{font:inherit;background:#1f2630;color:var(--ink);
+                border:1px solid var(--line);border-radius:7px;padding:8px 12px;cursor:pointer}
+  button:hover{border-color:var(--blue)}
+  button.primary{background:var(--blue);border-color:var(--blue);color:#06111d;font-weight:600}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .opt{width:44px;height:44px;font-weight:700;font-size:17px}
+  .opt.on{background:var(--blue);color:#06111d;border-color:var(--blue)}
+  .verdict{margin-top:16px;padding:12px 14px;border-radius:8px;border-left:3px solid;
+           font-size:14px;display:none}
+  .verdict.ok{display:block;border-color:var(--green);background:#0d2818}
+  .verdict.no{display:block;border-color:var(--amber);background:#2b2109}
+  .verdict b{display:block;margin-bottom:4px;font-size:13px;letter-spacing:.04em;
+             text-transform:uppercase}
+  .verdict.ok b{color:var(--green)} .verdict.no b{color:var(--amber)}
+  pre{background:#0b0f14;border:1px solid var(--line);border-radius:7px;padding:12px;
+      overflow:auto;font:13px/1.55 var(--mono);margin:12px 0 0;white-space:pre-wrap}
+  table{width:100%;border-collapse:collapse;font:13px var(--mono);margin-top:12px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-weight:500}
+  .pill{display:inline-block;padding:2px 7px;border-radius:20px;font-size:11px;
+        font-weight:600;letter-spacing:.03em}
+  .pill.y{background:#0d2818;color:var(--green)} .pill.n{background:#2b2109;color:var(--amber)}
+  .cite{display:block;color:var(--blue);font:12px var(--mono);margin-top:6px}
+  .stat{display:flex;gap:22px;margin-top:14px;flex-wrap:wrap}
+  .stat div{font:12px var(--mono);color:var(--dim)}
+  .stat b{display:block;font-size:21px;color:var(--ink);font-weight:600}
+  .note{color:var(--dim);font-size:12.5px;margin-top:12px}
+  code{font:12.5px var(--mono);background:#0b0f14;padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Adaptive Practice Loop</h1>
+  <p class="sub">
+    A working instrument, not a mock-up. Every number below comes from the running
+    API. ⚠️ The panels are the three things a README cannot convince you of.
+  </p>
+
+  <!-- ── 1. the tutor ─────────────────────────────────────────────────── -->
+  <div class="panel">
+    <h2>1. The tutor will refuse</h2>
+    <p class="why">
+      Pick a question, pick an answer. ⚠️ When the approved corpus does not cover the
+      question, the tutor <b>abstains</b> rather than inventing an explanation — and
+      the abstention is a product decision, not an error.
+    </p>
+    <div class="row">
+      <select id="itemSelect"></select>
+      <span style="color:var(--dim);font-size:13px">answer:</span>
+      <button class="opt" data-opt="A">A</button>
+      <button class="opt" data-opt="B">B</button>
+      <button class="opt" data-opt="C">C</button>
+      <button class="opt" data-opt="D">D</button>
+      <button class="primary" id="explainBtn" disabled>Explain</button>
+    </div>
+    <div class="verdict" id="verdict"></div>
+  </div>
+
+  <!-- ── 2. the idempotent write ──────────────────────────────────────── -->
+  <div class="panel">
+    <h2>2. A write sent five times applies once</h2>
+    <p class="why">
+      ⚠️ A client whose response was lost will retry — correctly. This sends the
+      <b>same write five times under one <code>Idempotency-Key</code></b> and shows
+      what the server did. The pattern that stops a retried transfer moving money twice.
+    </p>
+    <div class="row">
+      <button class="primary" id="idemBtn">Send the same write ×5</button>
+      <button id="conflictBtn">…then reuse the key with a <i>different</i> body</button>
+    </div>
+    <div id="idemOut"></div>
+  </div>
+
+  <!-- ── 3. what next ─────────────────────────────────────────────────── -->
+  <div class="panel">
+    <h2>3. What to practise next</h2>
+    <p class="why">
+      ⚠️ Not &ldquo;the weakest topic&rdquo;. A weighted function over five named terms,
+      each of which a reviewer can read in <code>src/selector.py</code>.
+    </p>
+    <div class="row"><button class="primary" id="recBtn">Recommend the next item</button></div>
+    <div id="recOut"></div>
+  </div>
+
+  <p class="note">
+    Source: <code>github.com/esecoder/adaptive-practice-loop</code> ·
+    run locally with <code>./run.sh ui</code>
+  </p>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const body = await r.json().catch(() => ({}));
+  return { status: r.status, body };
+}
+
+let chosen = null;
+
+// ── 1. the tutor ─────────────────────────────────────────────────────────
+async function loadItems() {
+  const { body } = await api("/bank/items");
+  // ⚠️ only items with authored content can be explained — the API 404s on the
+  // rest, and a demo that offers a button which always fails teaches nothing.
+  const { body: src } = await api("/content/sources");
+  // ⚠️ `authored_questions`, not `questions` — the API names the field for what it
+  // means. An empty set means the lookup failed, so fall back to all items rather
+  // than showing an empty dropdown.
+  const withContent = new Set(src.authored_questions || []);
+  const usable = body.filter((i) => withContent.size === 0 || withContent.has(i.item_id));
+  const list = usable.length ? usable : body;
+  $("#itemSelect").innerHTML = list
+    .map((i) => `<option value="${esc(i.item_id)}">${esc(i.item_id)} · ${esc(i.concept_id)}</option>`)
+    .join("");
+}
+
+document.querySelectorAll(".opt").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll(".opt").forEach((x) => x.classList.remove("on"));
+  b.classList.add("on");
+  chosen = b.dataset.opt;
+  $("#explainBtn").disabled = false;
+}));
+
+$("#explainBtn").addEventListener("click", async () => {
+  const item_id = $("#itemSelect").value;
+  const v = $("#verdict");
+  v.className = "verdict";
+  v.textContent = "…";
+  const { body: j } = await api("/explain", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ item_id, chosen }),
+  });
+  if (j.detail) { v.className = "verdict no"; v.innerHTML = `<b>Refused</b>${esc(j.detail)}`; return; }
+
+  const grounded = j.grounded;
+  v.className = "verdict " + (grounded ? "ok" : "no");
+  v.innerHTML = `
+    <b>${grounded ? "Grounded in approved content" : "Abstained — routed to a human"}</b>
+    ${esc(j.explanation)}
+    ${j.misconception ? `<pre>misconception: ${esc(j.misconception)}</pre>` : ""}
+    ${(j.citations || []).map((c) => `<span class="cite">↳ ${esc(c.passage_id)} — ${esc(c.source)}</span>`).join("")}
+    <div class="note">
+      correct: <b>${esc(j.correct)}</b> · generator: <code>${esc(j.generator)}</code>
+      ${j.reason ? ` · reason: ${esc(j.reason)}` : ""}
+    </div>`;
+});
+
+// ── 2. the idempotent write ──────────────────────────────────────────────
+$("#idemBtn").addEventListener("click", async () => {
+  const key = "demo-" + Date.now();
+  const payload = { candidate_id: "demo", item_id: "q-001", correct: true, day: 0 };
+  const rows = [];
+  for (let i = 1; i <= 5; i++) {
+    const { status, body } = await api("/attempts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": key },
+      body: JSON.stringify(payload),
+    });
+    rows.push(`<tr><td>${i}</td><td>${status}</td>
+      <td><span class="pill ${body.written ? "y" : "n"}">${body.written ? "WROTE" : "replayed"}</span></td>
+      <td>${esc((body.note || "").slice(0, 58))}</td></tr>`);
+  }
+  const { body: rec } = await api("/reconcile");
+  $("#idemOut").innerHTML = `
+    <table><tr><th>#</th><th>HTTP</th><th>effect</th><th>server said</th></tr>${rows.join("")}</table>
+    <div class="stat">
+      <div><b>${rec.attempts ?? "?"}</b>attempt rows</div>
+      <div><b>5</b>requests sent</div>
+      <div><b>${rec.clean ? "clean" : "findings"}</b>reconciliation</div>
+    </div>
+    <p class="note">⚠️ Five requests, one write. The four retries returned the original
+    response and touched nothing.</p>`;
+});
+
+$("#conflictBtn").addEventListener("click", async () => {
+  const key = "demo-conflict-" + Date.now();
+  const a = { candidate_id: "demo", item_id: "q-001", correct: true, day: 0 };
+  const first = await api("/attempts", {
+    method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": key },
+    body: JSON.stringify(a),
+  });
+  const second = await api("/attempts", {
+    method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": key },
+    body: JSON.stringify({ ...a, correct: false }),   // ⚠️ same key, DIFFERENT body
+  });
+  $("#idemOut").innerHTML = `
+    <table>
+      <tr><th>request</th><th>HTTP</th><th>server said</th></tr>
+      <tr><td>same key, same body</td><td>${first.status}</td>
+          <td>${esc((first.body.note || "").slice(0, 52))}</td></tr>
+      <tr><td>same key, <b>different</b> body</td><td>${second.status}</td>
+          <td>${esc((second.body.detail || second.body.note || "").slice(0, 52))}</td></tr>
+    </table>
+    <p class="note">⚠️ <b>${second.status}</b>, not a replay. Returning the first response
+    would silently discard the second request; writing again would double-apply under one
+    key. This is the decision most implementations get wrong.</p>`;
+});
+
+// ── 3. recommendation ────────────────────────────────────────────────────
+$("#recBtn").addEventListener("click", async () => {
+  const { body: j } = await api("/recommend", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ candidate_id: "demo", attempts: [], day: 0 }),
+  });
+  const terms = Object.entries(j.terms || {})
+    .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${Number(v).toFixed(3)}</td></tr>`).join("");
+  $("#recOut").innerHTML = `
+    <pre>${esc(j.explanation || "")}</pre>
+    <table><tr><th>term</th><th>value</th></tr>${terms}</table>
+    <div class="stat">
+      <div><b>${esc(j.item_id)}</b>next item</div>
+      <div><b>${Number(j.score).toFixed(3)}</b>score</div>
+      <div><b>${esc(j.basis)}</b>basis</div>
+    </div>
+    <p class="note">⚠️ <code>basis: cold_start</code> means this rests on the prior, not on
+    this candidate&rsquo;s history — and the API says so rather than presenting a guess as a
+    recommendation.</p>`;
+});
+
+loadItems();
+</script>
+</body>
+</html>
