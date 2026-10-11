@@ -69,7 +69,7 @@ case "$cmd" in
   # ⚠️ Listed here so ./run.sh test covers the UI too — it was the one component with
   # no executed test at all.
   test)
-    for t in tests/test_ui_browser.py; do [ -f "$t" ] && "$PY" "$t" || true; done
+    for t in tests/test_ui_browser.py tests/test_ui_layout.py; do [ -f "$t" ] && "$PY" "$t" || true; done
     for m in irt scheduler selector competency retrieval tutor idempotency langchain_pipeline vector_index; do
       [ -f "src/$m.py" ] && "$PY" "src/$m.py" --selftest || true
     done

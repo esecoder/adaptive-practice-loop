@@ -48,7 +48,12 @@
   .verdict.ok b{color:var(--green)} .verdict.no b{color:var(--amber)}
   pre{background:#0b0f14;border:1px solid var(--line);border-radius:7px;padding:12px;
       overflow:auto;font:13px/1.55 var(--mono);margin:12px 0 0;white-space:pre-wrap}
-  table{width:100%;border-collapse:collapse;font:13px var(--mono);margin-top:12px}
+  /* ⚠️ `table-layout:fixed` plus wrapping cells, because one long unbroken value in
+     a monospace cell — a URL, a key, an id — pushes the table past its container and
+     takes the whole page with it. */
+  table{width:100%;border-collapse:collapse;font:13px var(--mono);margin-top:12px;
+        table-layout:fixed}
+  td,th{overflow-wrap:anywhere}
   th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
   th{color:var(--dim);font-weight:500}
   .pill{display:inline-block;padding:2px 7px;border-radius:20px;font-size:11px;
@@ -60,8 +65,22 @@
   .stat b{display:block;font-size:21px;color:var(--ink);font-weight:600}
   .note{color:var(--dim);font-size:12.5px;margin-top:12px}
   code{font:12.5px var(--mono);background:#0b0f14;padding:1px 5px;border-radius:4px}
+  /* ⚠️ 24px of padding either side is 13% of a 360px screen. Reclaimed below 560px. */
+  @media (max-width:560px){
+    .wrap{padding:20px 12px 60px}
+    .panel{padding:16px 14px}
+    h1{font-size:21px}
+  }
+  /* ⚠️ WAS `min-width:340px`, WHICH CANNOT SHRINK.
+     Measured by arithmetic: 340 + 12*2 input padding + 24*2 wrap padding = 436px
+     required, so the input overflowed the page by 76px at a 360px viewport.
+     ⚠️ And the browser audit MISSED it, because Chrome will not render a window
+     narrower than ~500px — the audit tested 360px and silently got 500px, then
+     reported "no problems". Reading the CSS found what measuring could not.
+     `flex:1 1 240px` + `min-width:0` grows on a wide screen and shrinks on a narrow
+     one, which is what the fixed minimum was standing in for. */
   input[type=text]{font:inherit;background:#1f2630;color:var(--ink);border:1px solid var(--line);
-                   border-radius:7px;padding:8px 12px;min-width:340px}
+                   border-radius:7px;padding:8px 12px;flex:1 1 240px;min-width:0}
   input[type=text]:focus{outline:none;border-color:var(--blue)}
   button.sample{font-size:12.5px;padding:5px 10px}
 </style>
