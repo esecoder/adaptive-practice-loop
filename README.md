@@ -563,6 +563,16 @@ offline. A demo that needs `npm install` before it shows anything is a demo nobo
 ⚠️ A README can claim anything. These are the three things that are hard to believe
 without using them.
 
+⚠️ **And if you paste nothing, the page says so.** It reads:
+
+> ⚠️ **No document supplied — using my bundled 10-passage syllabus.** Everything below
+> answers from that. Paste your own text above to replace it.
+
+⚠️ Without that notice every answer below would look like it came from the reviewer's
+own content when it did not — the panel would be **misleading rather than empty**. A
+fallback that does not name itself is worse than no fallback.
+`tests/test_ui_browser.py` asserts it appears on load and returns after a reset.
+
 **1. The tutor will refuse.** Pick a question, pick an answer, and the verdict is
 either *grounded in approved content* (with citations) or **abstained**. ⚠️ Abstention
 is a product decision, not an error — a tutor that cannot abstain will invent an
