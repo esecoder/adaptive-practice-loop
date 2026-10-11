@@ -60,6 +60,10 @@
   .stat b{display:block;font-size:21px;color:var(--ink);font-weight:600}
   .note{color:var(--dim);font-size:12.5px;margin-top:12px}
   code{font:12.5px var(--mono);background:#0b0f14;padding:1px 5px;border-radius:4px}
+  input[type=text]{font:inherit;background:#1f2630;color:var(--ink);border:1px solid var(--line);
+                   border-radius:7px;padding:8px 12px;min-width:340px}
+  input[type=text]:focus{outline:none;border-color:var(--blue)}
+  button.sample{font-size:12.5px;padding:5px 10px}
 </style>
 </head>
 <body>
@@ -67,17 +71,48 @@
 
   <h1>Adaptive Practice Loop</h1>
   <p class="sub">
-    A working instrument, not a mock-up. Every number below comes from the running
-    API. ⚠️ The panels are the three things a README cannot convince you of.
+    <b>What this is.</b> A working slice of an exam-prep platform: it explains why an
+    answer was wrong, refuses to explain when the approved content does not cover the
+    question, and picks what to study next. Every number on this page comes from the
+    API running behind it — nothing here is mocked up.
+  </p>
+  <p class="sub">
+    <b>What to do — about 60 seconds.</b> The three panels below run in order:
+    <b>try to make it refuse</b> (§1), <b>send a write five times</b> (§2), then
+    <b>ask what to practise next</b> (§3). Each one shows you something a README
+    cannot.
   </p>
 
-  <!-- ── 1. the tutor ─────────────────────────────────────────────────── -->
+  <!-- ── 1a. the tutor refuses — the panel that CAN abstain ────────────── -->
   <div class="panel">
     <h2>1. The tutor will refuse</h2>
     <p class="why">
-      Pick a question, pick an answer. ⚠️ When the approved corpus does not cover the
-      question, the tutor <b>abstains</b> rather than inventing an explanation — and
-      the abstention is a product decision, not an error.
+      ⚠️ <b>Type something the syllabus does not cover.</b> The tutor <b>abstains</b>
+      rather than inventing an explanation, and the question is routed to a human as a
+      content gap. <b>Abstention is a product decision, not an error</b> — a tutor that
+      cannot abstain eventually tells a candidate they misunderstood something they did
+      not, which is the one failure an educational product cannot ship.
+    </p>
+    <div class="row">
+      <input id="askInput" type="text" placeholder="e.g. how do I bake sourdough bread" />
+      <button class="primary" id="askBtn">Ask</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <span style="color:var(--dim);font-size:12.5px">try one:</span>
+      <button class="sample" data-q="why does hybrid retrieval exist">a covered question</button>
+      <button class="sample" data-q="what is the capital of Peru">an uncovered one</button>
+      <button class="sample" data-q="how do I bake sourdough bread">a nonsense one</button>
+    </div>
+    <div class="verdict" id="askVerdict"></div>
+  </div>
+
+  <!-- ── 1b. the same gate, on a real item ────────────────────────────── -->
+  <div class="panel">
+    <h2>1b. The same gate, on a real question</h2>
+    <p class="why">
+      ⚠️ Every bank item below <b>is</b> covered by the corpus, so this path always
+      answers — the refusal lives in the panel above. Showing both is the point: the
+      gate decides, and the decision is visible.
     </p>
     <div class="row">
       <select id="itemSelect"></select>
@@ -254,6 +289,33 @@ $("#recBtn").addEventListener("click", async () => {
     this candidate&rsquo;s history — and the API says so rather than presenting a guess as a
     recommendation.</p>`;
 });
+
+// ── 1a. the refusal: free text, which CAN abstain ────────────────────────
+async function ask(text) {
+  const v = $("#askVerdict");
+  if (!text.trim()) return;
+  v.className = "verdict";
+  v.textContent = "…";
+  const { body: j } = await api("/ask", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question: text }),
+  });
+  if (j.detail) { v.className = "verdict no"; v.innerHTML = `<b>Refused</b>${esc(j.detail)}`; return; }
+  v.className = "verdict " + (j.grounded ? "ok" : "no");
+  v.innerHTML = `
+    <b>${j.grounded ? "Answered from approved content" : "Abstained — routed to a human"}</b>
+    ${esc(j.note)}
+    <pre>coverage: ${Number(j.best_coverage).toFixed(3)}${j.reason ? "  ·  " + esc(j.reason) : ""}</pre>
+    ${(j.passages || []).map((c) => `<span class="cite">↳ ${esc(c.passage_id)} — ${esc(c.source)}</span>`).join("")}
+    ${!j.grounded ? `<p class="note" style="margin-top:10px">⚠️ The answer is <b>not</b> a
+      guess. There is no explanation, because there is nothing in the approved content
+      to base one on.</p>` : ""}`;
+}
+$("#askBtn").addEventListener("click", () => ask($("#askInput").value));
+$("#askInput").addEventListener("keydown", (e) => { if (e.key === "Enter") ask($("#askInput").value); });
+document.querySelectorAll(".sample").forEach((b) => b.addEventListener("click", () => {
+  $("#askInput").value = b.dataset.q; ask(b.dataset.q);
+}));
 
 loadItems();
 </script>

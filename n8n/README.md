@@ -49,7 +49,26 @@ committed workflow is a workflow that only runs on one machine.
 error — the branch simply never fires.** That is why the structure is checked as a
 graph and not by eye.
 
-## ⚠️ A measured limitation, recorded rather than hidden
+## ⚠️ The abstention branch — FIXED
+
+**The branch is now reachable.** It was wired correctly and could not be triggered,
+because `/explain` only serves items a subject expert wrote a diagnosis for, and those
+are in the syllabus by construction — so grounding succeeded every time.
+
+⚠️ **The missing entry point was the candidate's own question.** `POST /ask` takes free
+text and runs the same gate, so the refusal is now demonstrable:
+
+    POST /ask  {"question": "why does hybrid retrieval exist"}
+      -> grounded=true,  coverage 1.000
+
+    POST /ask  {"question": "how do I bake sourdough bread"}
+      -> grounded=false, coverage 0.000   ⚠️ abstained
+
+⚠️ **The fix belongs in the workflow, not in the test.** Add a second trigger for the
+candidate's free-text question and route it on the same `grounded` field. The branch
+logic was always right; the input that could reach it did not exist.
+
+## ⚠️ The original finding, kept because it is the interesting part
 
 **The abstention branch is wired correctly and cannot currently be triggered through
 `/explain`.**

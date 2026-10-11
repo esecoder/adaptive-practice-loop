@@ -220,6 +220,24 @@ if FASTAPI_AVAILABLE:
                 raise ValueError(f"chosen must be a single option letter, got {v!r}")
             return v
 
+    class AskRequest(BaseModel):
+        """A free-text question from a candidate. ⚠️ NOT an item id.
+
+        This is the entry point where abstention actually happens: /explain only
+        serves items a subject expert wrote a diagnosis for, and those are in the
+        syllabus by construction, so /explain can never refuse. A candidate asking
+        about something outside the approved corpus is the case that matters."""
+        question: str = Field(..., min_length=1, max_length=400)
+
+    class AskResponse(BaseModel):
+        question: str
+        grounded: bool
+        abstained: bool
+        best_coverage: float
+        passages: list[Citation]
+        reason: str
+        note: str
+
     class Citation(BaseModel):
         passage_id: str
         source: str
@@ -543,6 +561,38 @@ if FASTAPI_AVAILABLE:
         if not page.exists():                                        # pragma: no cover
             return HTMLResponse("<h1>ui/index.html is missing</h1>", status_code=404)
         return HTMLResponse(page.read_text(encoding="utf-8"))
+
+    @app.post("/ask", response_model=AskResponse)
+    def ask(req: AskRequest) -> AskResponse:
+        """Answer from the approved corpus, or refuse. ⚠️ THE REFUSAL IS THE FEATURE.
+
+        ⚠️ This exists because the abstention path was UNREACHABLE. `/explain` serves
+        only items with authored content, every one of those is grounded, so a demo
+        promising "the tutor will refuse" had no way to demonstrate it — and neither
+        did the n8n workflow that routes on the same field.
+
+        The gate is `retrieval.ground`, which measures how much of the question the
+        corpus actually covers. ⚠️ Similarity does not separate answerable from
+        unanswerable; coverage does. That was measured, not assumed.
+        """
+        from retrieval import Index, ground, load_passages
+
+        if "ASK_INDEX" not in globals():
+            ASK_INDEX = Index(load_passages())                       # noqa: F821
+        g = ground(ASK_INDEX, req.question)                          # noqa: F821
+
+        return AskResponse(
+            question=req.question,
+            grounded=g.grounded,
+            abstained=not g.grounded,
+            best_coverage=g.best_coverage,
+            passages=[Citation(passage_id=p.id, source=p.source) for p in g.passages],
+            reason=g.reason,
+            note=("answered from approved content" if g.grounded else
+                  "⚠️ abstained: the approved corpus does not cover this, so it is "
+                  "routed to a human rather than answered. An abstention is a correct "
+                  "outcome, and a content gap for a human to close."),
+        )
 
     @app.get("/reconcile")
     def reconcile() -> dict:
