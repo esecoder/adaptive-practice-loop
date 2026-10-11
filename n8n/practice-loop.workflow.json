@@ -1,0 +1,184 @@
+{
+  "name": "adaptive-practice — explain, then route on grounded",
+  "meta": {
+    "description": "⚠️ THE BRANCH IS THE POINT. POST /explain returns `grounded`, and a grounded answer goes straight to the candidate while an abstention is routed to a human queue. That is the product decision this repository is built around: a tutor that cannot abstain will invent an explanation, and a candidate who is told they misunderstood something they did not is worse off than one who is told nothing.",
+    "instance": "self-hosted",
+    "requires": {
+      "env": {
+        "API_BASE": "e.g. http://host.docker.internal:8000 — from inside the container, localhost is the container",
+        "QUEUE_URL": "where an abstention is enqueued for a human, e.g. http://host.docker.internal:8001/queue"
+      },
+      "api": [
+        "POST /explain    {item_id, chosen} -> {grounded, abstained, citations, explanation, ...}",
+        "POST /recommend  {candidate_id, attempts, day} -> {item_id, score, terms, ...}"
+      ]
+    }
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "practice",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-260, 300],
+      "webhookId": "adaptive-practice",
+      "notes": "POST /webhook/practice — body: {candidate_id, item_id, chosen, attempts, day}"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.API_BASE }}/explain",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ item_id: $json.body.item_id, chosen: $json.body.chosen }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000002",
+      "name": "Explain",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-40, 300],
+      "notes": "⚠️ `chosen` is validated server-side to a single option letter. A malformed value is a 422, not a silent default — which is why the branch below can trust `grounded`."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "grounded-check",
+              "leftValue": "={{ $json.grounded }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000003",
+      "name": "Grounded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [180, 300],
+      "notes": "⚠️⚠️ THE DECISION THIS WORKFLOW EXISTS TO MAKE. `grounded` comes from the retrieval gate, not from a model's self-report — a model asked whether it is confident answers yes."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.API_BASE }}/recommend",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ candidate_id: $('Webhook').item.json.body.candidate_id || 'anonymous', attempts: $('Webhook').item.json.body.attempts || [], day: $('Webhook').item.json.body.day || 0 }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000004",
+      "name": "Recommend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [420, 220],
+      "notes": "⚠️ Reached ONLY when the corpus supports an answer. The next item follows an explanation the candidate can actually rely on."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.QUEUE_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ kind: 'abstention', item_id: $('Webhook').item.json.body.item_id, chosen: $('Webhook').item.json.body.chosen, candidate_id: $('Webhook').item.json.body.candidate_id || 'anonymous', reason: $json.reason, needs: 'a subject expert must decide whether this question is in scope' }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000005",
+      "name": "Queue for human review",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [420, 400],
+      "notes": "⚠️ An abstention is a QUEUE ITEM, not an error. It is the signal that the syllabus does not cover a question a candidate was asked — which is a content gap for a human to close, and the most valuable thing this workflow emits."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ grounded: true, explanation: $('Explain').item.json.explanation, citations: $('Explain').item.json.citations, next_item: $json.item_id, basis: $json.basis, note: $json.note }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000006",
+      "name": "Respond — answered",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [660, 220]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ grounded: false, abstained: true, explanation: $('Explain').item.json.explanation, queued_for_review: true, reason: $('Explain').item.json.reason }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000007",
+      "name": "Respond — abstained",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [660, 400],
+      "notes": "⚠️ 200, not 500. An abstention is a correct outcome, not a failure — and a client that treats it as an error will retry it, which is how a content gap becomes an outage."
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Explain", "type": "main", "index": 0 }]]
+    },
+    "Explain": {
+      "main": [[{ "node": "Grounded?", "type": "main", "index": 0 }]]
+    },
+    "Grounded?": {
+      "main": [
+        [{ "node": "Recommend", "type": "main", "index": 0 }],
+        [{ "node": "Queue for human review", "type": "main", "index": 0 }]
+      ]
+    },
+    "Recommend": {
+      "main": [[{ "node": "Respond — answered", "type": "main", "index": 0 }]]
+    },
+    "Queue for human review": {
+      "main": [[{ "node": "Respond — abstained", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "pinData": {},
+  "versionId": "a1000000-0000-4000-8000-0000000000ff",
+  "active": false,
+  "tags": []
+}
