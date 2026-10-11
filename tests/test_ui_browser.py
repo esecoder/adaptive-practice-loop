@@ -79,6 +79,29 @@ DRIVER = r"""
     out.push("explain:" + (document.querySelector("#verdict").classList.contains("ok") ? "ok" : "WRONG"));
     // the dropdown must be populated BY THE FETCH, which only JS can do
     out.push("items:" + (document.querySelectorAll("#itemSelect option").length > 0 ? "ok" : "WRONG"));
+
+    // ---- ⚠️ THE CORPUS PANEL, which is the newest thing and would otherwise ship
+    // ---- untested. It types into the textarea, loads, and asks against the NEW text.
+    document.querySelector("#corpusText").value =
+      "## p-1 — Ossobuco\n" + "Ossobuco braises veal shanks in white wine and stock. ".repeat(6) +
+      "\n\n## p-2 — Gremolata\n" + "Gremolata is lemon zest parsley and garlic, chopped fine. ".repeat(6);
+    document.querySelector("#corpusLoadBtn").click();
+    await t(1500);
+    const cs = document.querySelector("#corpusState").textContent;
+    out.push("corpus-load:" + (/uploaded/.test(cs) ? "ok" : "WRONG:" + cs.slice(0, 30)));
+
+    // ⚠️ ask against the UPLOADED text: it must ground, and the syllabus question
+    // must now abstain. Both directions, because one alone proves nothing.
+    await ask("how do you braise the veal shanks in white wine"); await t(500);
+    out.push("corpus-grounded:" + (document.querySelector("#askVerdict").classList.contains("ok") ? "ok" : "WRONG"));
+    await ask("why does hybrid retrieval exist"); await t(500);
+    out.push("corpus-old-abstains:" + (document.querySelector("#askVerdict").classList.contains("no") ? "ok" : "WRONG"));
+
+    document.querySelector("#corpusResetBtn").click();
+    await t(1200);
+    const rs = document.querySelector("#corpusState").textContent;
+    out.push("corpus-reset:" + (/bundled/.test(rs) ? "ok" : "WRONG:" + rs.slice(0, 30)));
+
     out.push("errors:" + (window.__errs?.length ? window.__errs.join(";") : "none"));
   } catch (e) { out.push("EXCEPTION:" + e.message); }
   document.title = "RESULTS::" + out.join("|");
@@ -117,6 +140,10 @@ def main() -> int:
         return 0
 
     port = free_port()
+    # ⚠️ SIDE FILE, NOT THE SHIPPED PAGE. The previous version patched ui/index.html
+    # in place and restored it in a `finally` — which does not run if the test is
+    # killed. Measured: a shell timeout left the harness script inside the page a
+    # reviewer would be served. A side file cannot leak that way.
     original = (ROOT / "ui" / "index.html").read_text(encoding="utf-8")
     patched = original.replace(
         "<script>",
@@ -128,9 +155,11 @@ def main() -> int:
     # ⚠️ The page is patched on disk because the API serves ui/index.html directly.
     # A `try/finally` restores it even if Chrome crashes, so a failed test cannot
     # leave a test-harness script shipped in the reviewer's page.
+    harness = ROOT / "ui" / "_harness2.html"
+    harness.write_text(patched, encoding="utf-8")
+
     proc = None
     try:
-        (ROOT / "ui" / "index.html").write_text(patched, encoding="utf-8")
 
         env = {**os.environ, "PYTHONWARNINGS": "ignore"}
         proc = subprocess.Popen(
@@ -152,7 +181,7 @@ def main() -> int:
         dom = subprocess.run(
             [browser, "--headless=new", "--disable-gpu", "--no-sandbox",
              "--virtual-time-budget=20000", "--dump-dom",
-             f"http://127.0.0.1:{port}/"],
+             f"http://127.0.0.1:{port}/_harness2"],
             capture_output=True, text=True, timeout=90,
         ).stdout
 
@@ -180,7 +209,7 @@ def main() -> int:
         return 0
 
     finally:
-        (ROOT / "ui" / "index.html").write_text(original, encoding="utf-8")
+        harness.unlink(missing_ok=True)
         if proc:
             proc.send_signal(signal.SIGTERM)
             proc.wait(timeout=10)

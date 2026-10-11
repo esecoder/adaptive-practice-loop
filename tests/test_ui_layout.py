@@ -117,9 +117,20 @@ def main() -> int:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
 
-    page = ROOT / "ui" / "index.html"
-    original = page.read_text(encoding="utf-8")
-    page.write_text(original.replace("</body>", f"<script>{DRIVER}</script>\n</body>", 1), encoding="utf-8")
+    # ⚠️⚠️ HARNESS GOES TO A SIDE FILE, NOT INTO THE SHIPPED PAGE.
+    #
+    # Patching ui/index.html in place and restoring in a `finally` is not safe: this
+    # test was killed by a shell timeout, the `finally` never ran, and the harness
+    # script was left inside the page a reviewer would be served. Measured — 1 harness
+    # trace in ui/index.html and a dirty working tree.
+    #
+    # A side file cannot do that. If the test dies, the shipped page was never touched.
+    page = ROOT / "ui" / "_harness.html"
+    page.write_text(
+        (ROOT / "ui" / "index.html").read_text(encoding="utf-8").replace(
+            "</body>", f"<script>{DRIVER}</script>\n</body>", 1),
+        encoding="utf-8",
+    )
 
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "api:app", "--app-dir", "src",
@@ -141,7 +152,7 @@ def main() -> int:
             dom = subprocess.run(
                 [CHROME, "--headless=new", "--disable-gpu", "--no-sandbox",
                  f"--window-size={w},2000", "--virtual-time-budget=20000", "--dump-dom",
-                 f"http://127.0.0.1:{port}/"],
+                 f"http://127.0.0.1:{port}/_harness"],
                 capture_output=True, text=True, timeout=90).stdout
             m = re.search(r"<title>LAYOUT::(.*?)</title>", dom, re.S)
             if not m:
@@ -165,7 +176,8 @@ def main() -> int:
                 print("          ⚠️ the page scrolls horizontally")
                 failures.append(f"{w}:page-overflow")
     finally:
-        page.write_text(original, encoding="utf-8")
+        # ⚠️ Deleting our own side file is enough. The shipped page was never modified.
+        page.unlink(missing_ok=True)
         proc.send_signal(signal.SIGTERM)
         proc.wait(timeout=10)
 

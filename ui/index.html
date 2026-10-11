@@ -83,6 +83,11 @@
                    border-radius:7px;padding:8px 12px;flex:1 1 240px;min-width:0}
   input[type=text]:focus{outline:none;border-color:var(--blue)}
   button.sample{font-size:12.5px;padding:5px 10px}
+  textarea{font:12.5px/1.5 var(--mono);background:#0b0f14;color:var(--ink);
+           border:1px solid var(--line);border-radius:7px;padding:10px 12px;
+           width:100%;min-height:110px;resize:vertical}
+  textarea:focus{outline:none;border-color:var(--blue)}
+  .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
 </style>
 </head>
 <body>
@@ -102,11 +107,33 @@
     cannot.
   </p>
 
+  <!-- ── 0. bring your own corpus ─────────────────────────────────────── -->
+  <div class="panel">
+    <h2>0. Bring your own content</h2>
+    <p class="why">
+      ⚠️ <b>You do not have to test with my syllabus.</b> Paste any document below and
+      every panel underneath answers from <i>your</i> text instead. That is the point:
+      the tutor decides from how much of your question the corpus covers, so the
+      honest demonstration is to hand it a corpus it has never seen.
+      <br><br>
+      Headings of the form <code>## id — Title</code> start a section; otherwise blank
+      lines separate passages. Which one ran is reported back.
+    </p>
+    <textarea id="corpusText" placeholder="Paste your own document here…"></textarea>
+    <div class="bar">
+      <button class="primary" id="corpusLoadBtn">Load my content</button>
+      <button id="corpusResetBtn">Back to the bundled syllabus</button>
+      <span id="corpusState" style="color:var(--dim);font-size:12.5px"></span>
+    </div>
+    <div id="corpusOut"></div>
+  </div>
+
   <!-- ── 1a. the tutor refuses — the panel that CAN abstain ────────────── -->
   <div class="panel">
     <h2>1. The tutor will refuse</h2>
     <p class="why">
-      ⚠️ <b>Type something the syllabus does not cover.</b> The tutor <b>abstains</b>
+      ⚠️ Answers come from the corpus loaded in §0 — the bundled syllabus until you
+      replace it. <b>Type something it does not cover.</b> The tutor <b>abstains</b>
       rather than inventing an explanation, and the question is routed to a human as a
       content gap. <b>Abstention is a product decision, not an error</b> — a tutor that
       cannot abstain eventually tells a candidate they misunderstood something they did
@@ -336,6 +363,56 @@ document.querySelectorAll(".sample").forEach((b) => b.addEventListener("click", 
   $("#askInput").value = b.dataset.q; ask(b.dataset.q);
 }));
 
+// ── 0. the corpus a reviewer brings ──────────────────────────────────────
+async function showCorpus() {
+  const { body: c } = await api("/corpus");
+  $("#corpusState").textContent = c.passages
+    ? `${c.name} · ${c.passages} passage(s) · ${c.characters.toLocaleString()} chars`
+    : "";
+  if (c.warning) {
+    $("#corpusOut").innerHTML = `<div class="verdict no" style="display:block">
+      <b>Small corpus</b>${esc(c.warning)}</div>`;
+  } else {
+    $("#corpusOut").innerHTML = "";
+  }
+}
+
+$("#corpusLoadBtn").addEventListener("click", async () => {
+  const text = $("#corpusText").value.trim();
+  const v = $("#corpusOut");
+  if (text.length < 20) {
+    v.innerHTML = `<div class="verdict no" style="display:block"><b>Too short</b>
+      Paste at least a paragraph — the gate needs vocabulary to work with.</div>`;
+    return;
+  }
+  v.innerHTML = `<div class="verdict" style="display:block">…loading</div>`;
+  const { status, body } = await api("/corpus", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "uploaded", text }),
+  });
+  if (status !== 200) {
+    v.innerHTML = `<div class="verdict no" style="display:block"><b>Refused</b>
+      ${esc(body.detail || status)}</div>`;
+    return;
+  }
+  // ⚠️ Load-time facts, so the reviewer knows what was built from their text before
+  // they ask anything — including a warning if it is too small for the gate.
+  v.innerHTML = `<div class="verdict ok" style="display:block">
+      <b>Loaded</b>${body.passages} passage(s) from ${body.characters.toLocaleString()}
+      characters, split by <code>${esc(body.chunker)}</code>.
+      §1 and §3 below now answer from this text.</div>`;
+  await showCorpus();
+  $("#corpusText").value = "";
+});
+
+$("#corpusResetBtn").addEventListener("click", async () => {
+  await api("/corpus/reset", { method: "POST" });
+  $("#corpusOut").innerHTML = `<div class="verdict" style="display:block">
+    Back to the bundled 10-passage syllabus.</div>`;
+  await showCorpus();
+});
+
+showCorpus();
 loadItems();
 </script>
 </body>

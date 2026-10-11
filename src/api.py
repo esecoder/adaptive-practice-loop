@@ -741,6 +741,25 @@ if FASTAPI_AVAILABLE:
                   "outcome, and a content gap for a human to close."),
         )
 
+    @app.get("/_harness2", include_in_schema=False)
+    def harness2():
+        """⚠️ The behaviour-harness page, same reasoning as /_harness."""
+        from fastapi.responses import HTMLResponse
+        f = Path(__file__).resolve().parent.parent / "ui" / "_harness2.html"
+        if not f.exists():
+            return HTMLResponse("<h1>no harness</h1>", status_code=404)
+        return HTMLResponse(f.read_text(encoding="utf-8"))
+
+    @app.get("/_harness", include_in_schema=False)
+    def harness():
+        """⚠️ Serves the test harness page when one exists. Present only while a UI test
+        is running; ui/index.html itself is never modified."""
+        from fastapi.responses import HTMLResponse
+        f = Path(__file__).resolve().parent.parent / "ui" / "_harness.html"
+        if not f.exists():
+            return HTMLResponse("<h1>no harness</h1>", status_code=404)
+        return HTMLResponse(f.read_text(encoding="utf-8"))
+
     @app.get("/reconcile")
     def reconcile() -> dict:
         """⚠️ The half that gets skipped.

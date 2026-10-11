@@ -7,3 +7,5 @@ out/
 *.eval
 .env
 .pytest_cache/
+_harness.html
+_harness2.html
