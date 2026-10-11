@@ -102,12 +102,22 @@ except ImportError:                                            # pragma: no cove
 
 BANK: Bank = default_bank()
 
+# ⚠️ The corpus /ask gates against, swappable at runtime by POST /corpus. Bundled by
+# default so a fresh clone behaves exactly as before.
+CORPUS: dict = {"name": "bundled syllabus", "index": None, "passages": [],
+                "chunker": "headings (## id — title)"}
+
 #: The retrieval index and the tutor, built once at import. ⚠️ At this corpus size that is a few
 #: milliseconds; `device-search` measures the same pattern at **351 seconds** over 859,569
 #: documents, which is why it moved its index into the database. The approved syllabus is
 #: curated and small by construction, so in-process is the right trade here and the wrong one at
 #: scale — see `retrieval.Index`.
 INDEX = Index()
+# ⚠️ The mutable corpus /ask gates against. Seeded here rather than left None, so a
+# request arriving before any upload behaves exactly as it did before /corpus
+# existed — a None index would raise inside the gate rather than answer.
+CORPUS["index"] = INDEX
+CORPUS["passages"] = INDEX.passages
 TUTOR = Tutor(index=INDEX)
 
 
@@ -219,6 +229,31 @@ if FASTAPI_AVAILABLE:
             if len(v) != 1 or not v.isalpha():
                 raise ValueError(f"chosen must be a single option letter, got {v!r}")
             return v
+
+    class CorpusRequest(BaseModel):
+        """⚠️ A REVIEWER'S OWN CONTENT.
+
+        Without this the demo only ever evaluates MY hand-written syllabus, which
+        shows that my content works — not that the system does. The whole claim is
+        that the gate decides from coverage of the APPROVED corpus, so the honest
+        demonstration is to hand it a different corpus and watch it decide.
+        """
+        name: str = Field("uploaded", max_length=80)
+        text: str = Field(..., min_length=20, max_length=400_000,
+                          description="headings (## Title) or blank-line paragraphs")
+
+    class CorpusResponse(BaseModel):
+        name: str
+        passages: int
+        characters: int
+        chunker: str
+        note: str
+        #: ⚠️ A SMALL CORPUS IS NOT A BROKEN ONE, AND IT MUST NOT LOOK LIKE ONE. The
+        #: gate needs MIN_KNOWN_TERMS corpus-known words in a question before it will
+        #: answer, so a three-passage upload makes short questions abstain — and the
+        #: demo reads as broken. Saying so up front is the difference between
+        #: "correct" and "appears broken".
+        warning: str = ""
 
     class AskRequest(BaseModel):
         """A free-text question from a candidate. ⚠️ NOT an item id.
@@ -562,6 +597,117 @@ if FASTAPI_AVAILABLE:
             return HTMLResponse("<h1>ui/index.html is missing</h1>", status_code=404)
         return HTMLResponse(page.read_text(encoding="utf-8"))
 
+    # ── the corpus a reviewer brings ────────────────────────────────────────
+    #
+    #  ⚠️ SESSION CORPUS, NOT A GLOBAL MUTATION. Uploading replaces the index that
+    #  /ask consults; /explain keeps using the authored content, because a diagnosis
+    #  is written by a subject expert and cannot be derived from raw text. Saying
+    #  which parts accept arbitrary input and which do not is part of the design.
+
+    def _chunk(text: str) -> tuple[list, str]:
+        """Split into passages. Two conventions, and the chosen one is REPORTED.
+
+        ⚠️ The heading convention is preferred because it preserves author intent —
+        a chunk boundary should fall where the writer put a boundary. Paragraph
+        grouping is the fallback, and it is a fallback: it can split a thought in
+        half. Which one ran is returned so the caller is never guessing.
+        """
+        from retrieval import Passage
+
+        heads = [ln for ln in text.splitlines() if ln.strip().startswith("## ")]
+        if len(heads) >= 2:
+            # ⚠️ SAME CONVENTION AS content/syllabus.md, so the bundled corpus and an
+            # upload take exactly the same path — otherwise the demo tests a chunker
+            # that nothing else uses.
+            passages, cur_id, cur_title, buf = [], None, "", []
+            for ln in text.splitlines():
+                if ln.strip().startswith("## "):
+                    if cur_id is not None and buf:
+                        body = "\n".join(buf).strip()
+                        if body:
+                            passages.append(Passage(id=cur_id, title=cur_title, text=body))
+                    head = ln.strip()[3:]
+                    if "—" in head:
+                        cur_id, cur_title = [x.strip() for x in head.split("—", 1)]
+                    elif "-" in head and len(head.split("-", 1)[0]) <= 24:
+                        cur_id, cur_title = [x.strip() for x in head.split("-", 1)]
+                    else:
+                        cur_id, cur_title = f"p-{len(passages) + 1}", head
+                    buf = []
+                elif cur_id is not None:
+                    buf.append(ln)
+            if cur_id is not None and buf:
+                body = "\n".join(buf).strip()
+                if body:
+                    passages.append(Passage(id=cur_id, title=cur_title, text=body))
+            return passages, "headings (## id — title)"
+
+        # fallback: group blank-line paragraphs up to ~600 characters
+        paras = [b.strip() for b in text.split("\n\n") if b.strip()]
+        passages, buf, size = [], [], 0
+        for para in paras:
+            if buf and size + len(para) > 600:
+                body = "\n\n".join(buf)
+                passages.append(Passage(id=f"p-{len(passages) + 1}",
+                                        title=body.splitlines()[0][:60], text=body))
+                buf, size = [], 0
+            buf.append(para)
+            size += len(para)
+        if buf:
+            body = "\n\n".join(buf)
+            passages.append(Passage(id=f"p-{len(passages) + 1}",
+                                    title=body.splitlines()[0][:60], text=body))
+        return passages, "paragraphs (blank-line, ~600 chars)"
+
+    @app.post("/corpus", response_model=CorpusResponse)
+    def upload_corpus(req: CorpusRequest) -> CorpusResponse:
+        """Replace the corpus /ask consults. ⚠️ This is how a reviewer tests the SYSTEM."""
+        from retrieval import Index
+
+        passages, chunker = _chunk(req.text)
+        if not passages:
+            raise HTTPException(422, "no passages could be extracted from that text")
+        CORPUS["index"] = Index(passages)                             # noqa: F821
+        CORPUS["name"] = req.name                                     # noqa: F821
+        CORPUS["passages"] = passages                                 # noqa: F821
+        from retrieval import MIN_KNOWN_TERMS, tokenize
+
+        vocab = len({t for pg in passages for t in tokenize(pg.title + " " + pg.text)})
+        warn = ""
+        if len(passages) < 5 or vocab < 60:
+            warn = (f"small corpus: {len(passages)} passage(s), {vocab} distinct terms. "
+                    f"The gate needs {MIN_KNOWN_TERMS} corpus-known terms in a question "
+                    f"before it answers, so a SHORT question may abstain even when the "
+                    f"corpus covers the topic. That is the rule working, not an error.")
+
+        CORPUS["warning"] = warn
+        return CorpusResponse(
+            warning=warn,
+            name=req.name, passages=len(passages),
+            characters=sum(len(p.text) for p in passages), chunker=chunker,
+            note=("⚠️ /ask now refuses based on THIS corpus. The 10-passage syllabus "
+                  "is replaced until /corpus/reset."),
+        )
+
+    @app.get("/corpus", response_model=CorpusResponse)
+    def read_corpus() -> CorpusResponse:
+        ps = CORPUS.get("passages") or []                             # noqa: F821
+        return CorpusResponse(
+            name=CORPUS.get("name", "bundled syllabus"),              # noqa: F821
+            passages=len(ps), characters=sum(len(p.text) for p in ps),
+            chunker=CORPUS.get("chunker", "headings (## id — title)"),  # noqa: F821
+            note="the corpus /ask is currently gating against",
+            warning=CORPUS.get("warning", ""),
+        )
+
+    @app.post("/corpus/reset", response_model=CorpusResponse)
+    def reset_corpus() -> CorpusResponse:
+        from retrieval import Index, load_passages
+        CORPUS["index"] = Index(load_passages())                      # noqa: F821
+        CORPUS["name"] = "bundled syllabus"                           # noqa: F821
+        CORPUS["passages"] = load_passages()                          # noqa: F821
+        return read_corpus()
+
     @app.post("/ask", response_model=AskResponse)
     def ask(req: AskRequest) -> AskResponse:
         """Answer from the approved corpus, or refuse. ⚠️ THE REFUSAL IS THE FEATURE.
@@ -575,11 +721,12 @@ if FASTAPI_AVAILABLE:
         corpus actually covers. ⚠️ Similarity does not separate answerable from
         unanswerable; coverage does. That was measured, not assumed.
         """
-        from retrieval import Index, ground, load_passages
+        from retrieval import ground
 
-        if "ASK_INDEX" not in globals():
-            ASK_INDEX = Index(load_passages())                       # noqa: F821
-        g = ground(ASK_INDEX, req.question)                          # noqa: F821
+        # ⚠️ READ FROM THE MUTABLE CORPUS. The original cached a single Index in
+        # globals(), which made uploads impossible — the gate would have gone on
+        # answering from the bundled syllabus while the UI said otherwise.
+        g = ground(CORPUS["index"], req.question)                    # noqa: F821
 
         return AskResponse(
             question=req.question,
