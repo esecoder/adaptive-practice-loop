@@ -55,13 +55,21 @@ EOF
   exit 1
 }
 
-case "${1:-ui}" in
+# ⚠️ CAPTURE $1 WITH A DEFAULT BEFORE THE CASE. `case "${1:-ui}"` defaults the CASE
+# but leaves $1 itself unset, so `[ "$1" = "ui" ]` inside the branch raised
+# "$1: unbound variable" under `set -u` — a raw bash error as the very first thing a
+# reviewer sees when they type ./run.sh with no arguments.
+cmd="${1:-ui}"
+case "$cmd" in
   ui|serve)
     need_api
-    [ "$1" = "ui" ] && echo "  → http://127.0.0.1:8000   (Ctrl-C to stop)"
+    [ "$cmd" = "ui" ] && echo "  → http://127.0.0.1:8000   (Ctrl-C to stop)"
     exec "$PY" -m uvicorn api:app --app-dir src --host 127.0.0.1 --port 8000
     ;;
+  # ⚠️ Listed here so ./run.sh test covers the UI too — it was the one component with
+  # no executed test at all.
   test)
+    for t in tests/test_ui_browser.py; do [ -f "$t" ] && "$PY" "$t" || true; done
     for m in irt scheduler selector competency retrieval tutor idempotency langchain_pipeline vector_index; do
       [ -f "src/$m.py" ] && "$PY" "src/$m.py" --selftest || true
     done
