@@ -155,11 +155,24 @@ def replay(wf: dict) -> None:
     # ⚠️ Saying this out loud is the point. A workflow claim whose trigger cannot be
     # demonstrated is a claim to make carefully, and a test that asserted "the branch
     # exists" would have hidden it.
-    check("⚠️ MEASURED: /explain cannot reach the abstention branch today",
+    check("⚠️ MEASURED: /explain cannot reach the abstention branch",
           len(grounded_false) == 0,
           f"{len(grounded_true)} grounded, {len(grounded_false)} abstained — the "
-          f"branch is wired and correct; its trigger is not reachable from the item "
-          f"bank. See n8n/README.md")
+          f"branch is wired and correct; /explain cannot produce the state")
+
+    # ---- ⚠️ THE FIX: /ask CAN abstain, so the branch is reachable -----------
+    # ⚠️ Found by asking "does the UI let a reviewer SEE the refusal?" It did not —
+    # the dropdown offered only the 8 items that never refuse. The missing thing was
+    # an entry point, not a test. A candidate's own question is the case that matters.
+    on = client.post("/ask", json={"question": "why does hybrid retrieval exist"})
+    off = client.post("/ask", json={"question": "how do I bake sourdough bread"})
+    check("POST /ask is grounded for a covered question",
+          on.status_code == 200 and on.json()["grounded"] is True,
+          f"coverage {on.json()['best_coverage']:.3f}")
+    check("⚠️ POST /ask ABSTAINS for an uncovered question",
+          off.status_code == 200 and off.json()["abstained"] is True,
+          f"coverage {off.json()['best_coverage']:.3f} — so the workflow's false "
+          f"branch has an entry point that can reach it")
 
     # ⚠️ But the GATE can abstain — demonstrated directly, so the branch is not
     # decorative. The condition exists; only this entry point cannot produce it.
