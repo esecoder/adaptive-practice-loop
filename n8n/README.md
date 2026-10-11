@@ -3,9 +3,19 @@
     python tests/test_workflow.py        # validates the artefact and replays its logic
 
 ```
-Webhook  →  Explain  →  Grounded?  ──true──→  Recommend  →  Respond (answered)
-                                   └─false─→  Queue for human review  →  Respond (abstained)
+POST /webhook/practice            ← a bank item; can NEVER abstain
+  → Explain → Grounded? ──true──→ Recommend → Respond (answered)
+                        └─false─→ Queue for human review → Respond
+
+POST /webhook/ask                 ← ⚠️ a candidate's own question; CAN abstain
+  → Ask     → Grounded? ──true──→ Respond (answered)
+                        └─false─→ Queue for human review → Respond (abstained)
 ```
+
+⚠️ **TWO TRIGGERS, AND THE SECOND ONE IS THE FIX.** `/explain` only serves items a
+subject expert wrote a diagnosis for, and an item only gets authored content if its
+concept is *in the syllabus* — so grounding succeeded every time and the queue branch
+was unreachable. A **candidate's own question** is the input that can reach it.
 
 ⚠️ **The branch is the point.** `POST /explain` returns `grounded`, and a grounded
 answer goes to the candidate while an **abstention is routed to a human queue**. That
@@ -14,6 +24,14 @@ will invent an explanation, and a candidate told they misunderstood something th
 did not is worse off than one told nothing.
 
 ## Running it
+
+⚠️ **No container required.** n8n is an npm package:
+
+```bash
+npm install n8n && npx n8n import:workflow --input=n8n/practice-loop.workflow.json
+```
+
+The Docker route below also works, and is what most documentation shows:
 
 ```bash
 docker run -d --name n8n-practice -p 5678:5678 n8nio/n8n
