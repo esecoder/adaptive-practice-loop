@@ -1,4 +1,5 @@
 {
+  "id": "ad4pt1vePra0ct1ce",
   "name": "adaptive-practice \u2014 explain, then route on grounded",
   "meta": {
     "description": "\u26a0\ufe0f THE BRANCH IS THE POINT. POST /explain returns `grounded`, and a grounded answer goes straight to the candidate while an abstention is routed to a human queue. That is the product decision this repository is built around: a tutor that cannot abstain will invent an explanation, and a candidate who is told they misunderstood something they did not is worse off than one who is told nothing.  \u26a0\ufe0f TWO TRIGGERS. /webhook/practice explains a bank item and can never abstain; /webhook/ask takes a candidate's free text and CAN. The second is what makes the queue branch reachable rather than decorative.",

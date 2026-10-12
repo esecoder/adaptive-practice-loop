@@ -25,7 +25,9 @@ did not is worse off than one told nothing.
 
 ## Running it
 
-⚠️ **No container required.** n8n is an npm package:
+⚠️ **No container required.** n8n is an npm package (⚠️ but it is 2.6 GB of
+`node_modules`, and installing it took 11 minutes — twice, the first time failing on a
+dropped connection):
 
 ```bash
 npm install n8n && npx n8n import:workflow --input=n8n/practice-loop.workflow.json
@@ -66,6 +68,41 @@ committed workflow is a workflow that only runs on one machine.
 ⚠️ **n8n resolves connections by node NAME, and a name that does not exist is not an
 error — the branch simply never fires.** That is why the structure is checked as a
 graph and not by eye.
+
+## ✅ Verified running in real n8n
+
+**n8n 2.35.7 — imported, activated, and both branches fired.**
+
+```
+POST /webhook/ask  {"question": "how do I bake sourdough bread"}
+  -> {"grounded":false,"abstained":true,"queued_for_review":true,
+      "reason":"no passage shares any content word with the question","coverage":0}
+  ⚠️ and the human queue received 1 message
+
+POST /webhook/ask  {"question": "why does hybrid retrieval exist"}
+  -> {"grounded":true,"coverage":1,
+      "citations":[{"passage_id":"d-retrieval#1","source":"Why hybrid retrieval exists"}, …]}
+```
+
+## ⚠️ Two things only running n8n could reveal
+
+**1. `SQLITE_CONSTRAINT: NOT NULL constraint failed: workflow_entity.id`**
+
+My workflow JSON was missing a **top-level `id`**. Every structural check passed —
+connections, orphans, reachability, the two-output IF — because **the graph was valid
+and the record was not.** A well-formed graph is not a well-formed n8n record.
+
+**2. `access to env vars denied` → `undefined`**
+
+⚠️ **n8n ≥ 2.x blocks `$env` in expressions by default.** `{{ $env.API_BASE }}`
+resolved to `undefined`, so the HTTP node called `undefined/ask` and the execution
+errored — while the webhook still returned **200 with an empty body.**
+
+⚠️ That combination is the worst kind: a green status code and a dead workflow. The
+fix is `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`, or workflow variables instead of env.
+
+⚠️ **Neither of these is findable by reading the JSON**, which is why the workflow sat
+"graph-validated, never executed" for so long. It needed to be run.
 
 ## ⚠️ The abstention branch — FIXED
 
